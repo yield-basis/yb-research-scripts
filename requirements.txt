@@ -1,2 +1,4 @@
 eth-brownie
 ipython
+matplotlib
+PyQt5
