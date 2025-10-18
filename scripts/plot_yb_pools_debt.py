@@ -52,11 +52,11 @@ def main():
             debts[i].append(params[i]['amm_debt'] / pool_value)
 
     for i in range(n):
-        pylab.plot(times, np.array(imbalances[i]) * 100, label=lts[i].symbol())
-        # pylab.plot(times, np.array(debts[i]) * 100, '--', c=c)
+        # pylab.plot(times, np.array(imbalances[i]) * 100, label=lts[i].symbol())
+        pylab.plot(times, np.array(debts[i]) * 100, label=lts[i].symbol())
 
-    pylab.title('YB cryptopools imbalance in volatility')
-    pylab.ylabel('Fraction of pool in crvUSD [%]')
+    pylab.title('YB cryptopools imbalance of debt in volatility')
+    pylab.ylabel('Debt fraction in AMM [%]')
     pylab.xticks(rotation=45, ha='right')
     pylab.legend()
     pylab.tight_layout()
