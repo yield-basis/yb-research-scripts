@@ -38,6 +38,9 @@ def main():
     growth_oracle = 1.0
     growth_scale = 1.0
 
+    growth_scale_adj = 1.0
+    growth_scale_values_adj = growth_scale_values[:]
+
     for block in range(START_BLOCK, current_block - (BATCH_SIZE - 1), BATCH_SIZE):
         transfers = []
         deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
@@ -55,18 +58,36 @@ def main():
 
         for from_block, to_block in zip(blocks[:-1], blocks[1:]):
             to_block -= 1
+
             if to_block > from_block:
                 with multicall(address=mc.address, block_identifier=from_block):
                     from_value = amm.value_oracle()
                     from_oracle = pool.price_oracle()
                     from_scale = pool.price_scale()
+                    from_xcp = pool.xcp_profit()
+                    from_vp = pool.get_virtual_price()
+                    from_debt = amm.get_debt()
+                    from_collateral = amm.collateral_amount()
+
                 with multicall(address=mc.address, block_identifier=to_block):
                     to_value = amm.value_oracle()
                     to_oracle = pool.price_oracle()
                     to_scale = pool.price_scale()
                     time = mc.getCurrentBlockTimestamp()
+                    to_xcp = pool.xcp_profit()
+                    to_vp = pool.get_virtual_price()
+                    to_debt = amm.get_debt()
+                    to_collateral = amm.collateral_amount()
+
+                from_collateral = from_collateral * (10**18 + from_xcp) // (2 * from_vp)
+                to_collateral = to_collateral * (10**18 + to_xcp) // (2 * to_vp)
+
+                from_value_adj = amm.value_oracle_for(from_collateral, from_debt, block_identifier=from_block)[1]
+                to_value_adj = amm.value_oracle_for(to_collateral, to_debt, block_identifier=to_block)[1]
+
                 tblocks.append(to_block)
                 times.append(datetime.fromtimestamp(time))
+
                 from_value_oracle = from_value[1] / from_oracle
                 from_value_scale = from_value[1] / from_scale
                 to_value_oracle = to_value[1] / to_oracle
@@ -77,9 +98,17 @@ def main():
                 growth_scale *= scale_oracle_mul
                 growth_oracle_values.append(growth_oracle)
                 growth_scale_values.append(growth_scale)
+
+                from_value_adj /= from_scale
+                to_value_adj /= to_scale
+                growth_mul_adj = to_value_adj / from_value_adj
+                growth_scale_adj *= growth_mul_adj
+                growth_scale_values_adj.append(growth_scale_adj)
+
                 print(times[-1], from_block, to_block, growth_oracle, growth_scale)  # , growth_oracle_mul, scale_oracle_mul)
 
     pylab.plot(times, growth_scale_values, label="scale") 
+    pylab.plot(times, growth_scale_values_adj, label="scale adjusted") 
     pylab.plot(times, growth_oracle_values, label="oracle") 
     pylab.xticks(rotation=45, ha='right')
     pylab.legend()
