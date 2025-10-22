@@ -1,0 +1,14 @@
+[project]
+name = "yb-research-scripts"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "titanoboa>=0.2.8",
+    "web3>=7.12.1",
+    "web3mc>=0.1.11",
+    "matplotlib>=3.8",
+    "jupyter>=1.1.1",
+    "numpy>=2.3.4",
+    "pandas>=2.3.3",
+]
+
