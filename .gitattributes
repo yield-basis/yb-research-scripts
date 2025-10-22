@@ -1,0 +1,5 @@
+parallel_fetch_plots/data/* filter=lfs diff=lfs merge=lfs -text
+parallel_fetch_plots/data//*.csv filter=lfs diff=lfs merge=lfs -text
+parallel_fetch_plots/data/*/*.csv filter=lfs diff=lfs merge=lfs -text
+parallel_fetch_plots/abi/* filter=lfs diff=lfs merge=lfs -text
+parallel_fetch_plots/abi/*.json filter=lfs diff=lfs merge=lfs -text
