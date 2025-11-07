@@ -9,9 +9,7 @@
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter
 
-import numpy as np
 from brownie import multicall
-from collections import defaultdict
 from datetime import datetime
 from brownie import Contract, config
 from brownie import web3
@@ -21,6 +19,7 @@ config['autofetch_sources'] = True
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
 START_BLOCK = 23434125 + 1000
 BATCH_SIZE = 500
+ADJUST = True
 
 
 def main():
@@ -51,12 +50,10 @@ def main():
         pool = cryptopools[idx]
 
         for block in range(START_BLOCK, current_block - (BATCH_SIZE - 1), BATCH_SIZE):
-            transfers = []
             deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             withdrawals = lt.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             blocks = set([ev['blockNumber'] for ev in deposits] + [ev['blockNumber'] for ev in withdrawals])
 
-            batch_start = block
             batch_end = min(current_block, block + BATCH_SIZE)
             blocks.add(block)
             blocks.add(batch_end)
@@ -88,8 +85,8 @@ def main():
                         to_debt = amm.get_debt()
                         to_collateral = amm.collateral_amount()
 
-                    from_collateral = from_collateral * (10**18 + from_xcp) // (2 * from_vp)
-                    to_collateral = to_collateral * (10**18 + to_xcp) // (2 * to_vp)
+                    from_collateral = from_collateral * ((10**18 + from_xcp) / (2 * from_vp) if ADJUST else 1)
+                    to_collateral = to_collateral * ((10**18 + to_xcp) / (2 * to_vp) if ADJUST else 1)
 
                     from_value_adj = amm.value_oracle_for(from_collateral, from_debt, block_identifier=from_block)[1]
                     to_value_adj = amm.value_oracle_for(to_collateral, to_debt, block_identifier=to_block)[1]
@@ -118,7 +115,7 @@ def main():
 
     colors = ['orange', 'blue', 'gray']
     for idx in range(n):
-        plt.plot(times[idx], growth_scale_values_adj[idx], label=labels[idx], c=colors[idx]) 
+        plt.plot(times[idx], growth_scale_values_adj[idx], label=labels[idx], c=colors[idx])
 
     ax = plt.gca()
     ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
