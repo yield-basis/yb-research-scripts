@@ -17,6 +17,7 @@ from brownie import web3
 config['autofetch_sources'] = True
 
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
+# START_BLOCK = 23746000  # For display tests
 START_BLOCK = 23434125 + 1000
 BATCH_SIZE = 500
 ADJUST = True
@@ -43,6 +44,7 @@ def main():
 
     growth_scale_adj = [1.0] * n
     growth_scale_values_adj = [[1.0] for i in range(n)]
+    earned_profits = [[0.0] for i in range(n)]
 
     for idx in range(n):
         lt = lts[idx]
@@ -110,18 +112,25 @@ def main():
                     growth_mul_adj = to_value_adj / from_value_adj
                     growth_scale_adj[idx] *= growth_mul_adj
                     growth_scale_values_adj[idx].append(growth_scale_adj[idx])
+                    earned_profits[idx].append(earned_profits[idx][-1] + to_value_adj * (growth_mul_adj - 1))
 
                     print(times[idx][-1], labels[idx])
 
+    fig, (ax_rel, ax_abs) = plt.subplots(1, 2, sharey=False)
+
     colors = ['orange', 'blue', 'gray']
     for idx in range(n):
-        plt.plot(times[idx], growth_scale_values_adj[idx], label=labels[idx], c=colors[idx])
+        ax_rel.plot(times[idx], growth_scale_values_adj[idx], label=labels[idx], c=colors[idx])
+        ax_abs.plot(times[idx], earned_profits[idx], label=labels[idx], c=colors[idx])
 
-    ax = plt.gca()
-    ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    ax_rel.set_title("Relative growth")
+    ax_abs.set_title("Net system profit [BTC]")
 
-    plt.title("Fundamental value growth in YB pools")
-    plt.xticks(rotation=45, ha='right')
-    plt.legend()
-    plt.tight_layout()
+    ax_rel.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    ax_rel.legend()
+    ax_abs.legend()
+    ax_rel.tick_params("x", rotation=45)
+    ax_abs.tick_params("x", rotation=45)
+
+    fig.tight_layout()
     plt.show()
