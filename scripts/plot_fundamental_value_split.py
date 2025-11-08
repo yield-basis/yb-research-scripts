@@ -23,6 +23,25 @@ BATCH_SIZE = 500
 ADJUST = True
 
 
+def merge_feeds(times, values):
+    time_to_value = []
+    merged_times = set()
+    for idx in range(len(times)):
+        time_to_value.append(
+            {t: v for t, v in zip(times[idx], values[idx])}
+        )
+        merged_times.update(times[idx])
+    merged_times = sorted(list(merged_times))
+    running_values = [0] * len(times)
+    output_values = []
+    for t in merged_times:
+        for idx in range(len(times)):
+            if t in time_to_value[idx]:
+                running_values[idx] = time_to_value[idx][t]
+        output_values.append(sum(running_values))
+    return merged_times, output_values
+
+
 def main():
     mc = Contract("0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696")
 
@@ -32,6 +51,7 @@ def main():
     lts = [Contract(m[3]) for m in markets]
     amms = [Contract(m[2]) for m in markets]
     cryptopools = [Contract(amm.COLLATERAL()) for amm in amms]
+    stakers = [lt.staker() for lt in lts]
     labels = [lt.symbol() for lt in lts]
 
     current_block = web3.eth.block_number
@@ -45,11 +65,15 @@ def main():
     growth_scale_adj = [1.0] * n
     growth_scale_values_adj = [[1.0] for i in range(n)]
     earned_profits = [[0.0] for i in range(n)]
+    admin_fees = [[0.0] for i in range(n)]
+    fair_admin_fees = [[0.0] for i in range(n)]
+    staked_fractions = [[0.0] for i in range(n)]
 
     for idx in range(n):
         lt = lts[idx]
         amm = amms[idx]
         pool = cryptopools[idx]
+        staker = stakers[idx]
 
         for block in range(START_BLOCK, current_block - (BATCH_SIZE - 1), BATCH_SIZE):
             deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
@@ -86,6 +110,10 @@ def main():
                         to_vp = pool.get_virtual_price()
                         to_debt = amm.get_debt()
                         to_collateral = amm.collateral_amount()
+                        liquidity = lt.liquidity()
+                        staked = lt.balanceOf(staker)
+                        supply = lt.totalSupply()
+                        min_admin_fee = lt.min_admin_fee()
 
                     from_collateral = int(from_collateral * ((10**18 + from_xcp) / (2 * from_vp) if ADJUST else 1))
                     to_collateral = int(to_collateral * ((10**18 + to_xcp) / (2 * to_vp) if ADJUST else 1))
@@ -112,25 +140,40 @@ def main():
                     growth_mul_adj = to_value_adj / from_value_adj
                     growth_scale_adj[idx] *= growth_mul_adj
                     growth_scale_values_adj[idx].append(growth_scale_adj[idx])
-                    earned_profits[idx].append(earned_profits[idx][-1] + to_value_adj * (growth_mul_adj - 1))
+                    d_profit = to_value_adj * (growth_mul_adj - 1)
+                    earned_profits[idx].append(earned_profits[idx][-1] + d_profit)
+
+                    f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / supply)**0.5
+                    admin_fees[idx].append(liquidity[0] / 1e18)
+                    staked_fractions[idx].append(staked / supply)
+                    fair_admin_fees[idx].append(fair_admin_fees[idx][-1] + d_profit * f_a)
 
                     print(times[idx][-1], labels[idx])
 
-    fig, (ax_rel, ax_abs) = plt.subplots(1, 2, sharey=False)
+    fig, ((ax_rel, ax_charged_admin), (ax_abs, ax_fair_admin)) = plt.subplots(2, 2, sharey=False, sharex=True)
 
     colors = ['orange', 'blue', 'gray']
     for idx in range(n):
         ax_rel.plot(times[idx], growth_scale_values_adj[idx], label=labels[idx], c=colors[idx])
-        ax_abs.plot(times[idx], earned_profits[idx], label=labels[idx], c=colors[idx])
+
+    merged_times, earned_profits_sum = merge_feeds(times, earned_profits)
+    ax_abs.plot(merged_times, earned_profits_sum, c="black")
+    merged_times, admin_fees_sum = merge_feeds(times, admin_fees)
+    ax_charged_admin.plot(merged_times, admin_fees_sum, c="black")
+    merged_times, fair_admin_fees_sum = merge_feeds(times, fair_admin_fees)
+    ax_fair_admin.plot(merged_times, fair_admin_fees_sum, c="black")
 
     ax_rel.set_title("Relative growth")
     ax_abs.set_title("Net system profit [BTC]")
+    ax_charged_admin.set_title("Admin fees charged [BTC]")
+    ax_fair_admin.set_title("Correct admin fees [BTC]")
 
     ax_rel.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
     ax_rel.legend()
-    ax_abs.legend()
     ax_rel.tick_params("x", rotation=45)
     ax_abs.tick_params("x", rotation=45)
+    ax_charged_admin.tick_params("x", rotation=45)
+    ax_fair_admin.tick_params("x", rotation=45)
 
     fig.tight_layout()
     plt.show()
