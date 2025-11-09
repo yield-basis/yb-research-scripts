@@ -17,7 +17,7 @@ from brownie import web3
 config['autofetch_sources'] = True
 
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
-# START_BLOCK = 23746000  # For display tests
+# START_BLOCK = 23746000 - 50000  # For display tests
 START_BLOCK = 23434125 + 1000
 BATCH_SIZE = 500
 ADJUST = True
@@ -51,7 +51,7 @@ def main():
     lts = [Contract(m[3]) for m in markets]
     amms = [Contract(m[2]) for m in markets]
     cryptopools = [Contract(amm.COLLATERAL()) for amm in amms]
-    stakers = [lt.staker() for lt in lts]
+    stakers = [Contract(lt.staker()) for lt in lts]
     labels = [lt.symbol() for lt in lts]
 
     current_block = web3.eth.block_number
@@ -68,6 +68,8 @@ def main():
     admin_fees = [[0.0] for i in range(n)]
     fair_admin_fees = [[0.0] for i in range(n)]
     staked_fractions = [[0.0] for i in range(n)]
+    staked_pnl = [[0.0] for i in range(n)]
+    unstaked_pnl = [[0.0] for i in range(n)]
 
     for idx in range(n):
         lt = lts[idx]
@@ -75,10 +77,21 @@ def main():
         pool = cryptopools[idx]
         staker = stakers[idx]
 
+        staked_pps = None
+        unstaked_pps = 1.0
+        staked_deposits = None
+
         for block in range(START_BLOCK, current_block - (BATCH_SIZE - 1), BATCH_SIZE):
             deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             withdrawals = lt.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
-            blocks = set([ev['blockNumber'] for ev in deposits] + [ev['blockNumber'] for ev in withdrawals])
+            stakes = staker.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
+            unstakes = staker.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
+            blocks = set(
+                    [ev['blockNumber'] for ev in deposits]
+                    + [ev['blockNumber'] for ev in withdrawals]
+                    + [ev['blockNumber'] for ev in stakes]
+                    + [ev['blockNumber'] for ev in unstakes]
+            )
 
             batch_end = min(current_block, block + BATCH_SIZE)
             blocks.add(block)
@@ -100,6 +113,9 @@ def main():
                         from_vp = pool.get_virtual_price()
                         from_debt = amm.get_debt()
                         from_collateral = amm.collateral_amount()
+                        # from_liquidity = lt.liquidity()  # (admin, total, ideal_staked, staked)
+                        # from_staked = lt.balanceOf(staker)
+                        # from_supply = lt.totalSupply()
 
                     with multicall(address=mc.address, block_identifier=to_block):
                         to_value = amm.value_oracle()
@@ -110,10 +126,11 @@ def main():
                         to_vp = pool.get_virtual_price()
                         to_debt = amm.get_debt()
                         to_collateral = amm.collateral_amount()
-                        liquidity = lt.liquidity()
-                        staked = lt.balanceOf(staker)
-                        supply = lt.totalSupply()
+                        liquidity = to_liquidity = lt.liquidity()  # (admin, total, ideal_staked, staked)
+                        staked = to_staked = lt.balanceOf(staker)
+                        supply = to_supply = lt.totalSupply()
                         min_admin_fee = lt.min_admin_fee()
+                        staker_supply = staker.totalSupply()
 
                     from_collateral = int(from_collateral * ((10**18 + from_xcp) / (2 * from_vp) if ADJUST else 1))
                     to_collateral = int(to_collateral * ((10**18 + to_xcp) / (2 * to_vp) if ADJUST else 1))
@@ -140,17 +157,39 @@ def main():
                     growth_mul_adj = to_value_adj / from_value_adj
                     growth_scale_adj[idx] *= growth_mul_adj
                     growth_scale_values_adj[idx].append(growth_scale_adj[idx])
-                    d_profit = to_value_adj * (growth_mul_adj - 1)
+                    d_profit = to_value_adj - from_value_adj
                     earned_profits[idx].append(earned_profits[idx][-1] + d_profit)
 
                     f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / supply)**0.5
                     admin_fees[idx].append(liquidity[0] / 1e18)
-                    staked_fractions[idx].append(staked / supply)
                     fair_admin_fees[idx].append(fair_admin_fees[idx][-1] + d_profit * f_a)
 
-                    print(times[idx][-1], labels[idx])
+                    d_staked_value = 0
+                    d_unstaked_value = 0
+                    useful_value = to_value_adj * to_liquidity[1] / (to_liquidity[0] + to_liquidity[1])
+                    new_staked_pps = None
+                    if staker_supply > 0:
+                        new_staked_pps = useful_value * to_staked / to_supply / (staker_supply / 1e18)
+                    if staked_pps is not None:
+                        d_staked_value = staked_deposits * (new_staked_pps / staked_pps - 1)
+                    staked_deposits = useful_value * to_staked / to_supply
+                    staked_pps = new_staked_pps
+                    staked_pnl[idx].append(staked_pnl[idx][-1] + d_staked_value)
 
-    fig, ((ax_rel, ax_charged_admin), (ax_abs, ax_fair_admin)) = plt.subplots(2, 2, sharey=False, sharex=True)
+                    new_unstaked_pps = useful_value / (to_supply / 1e18)
+                    if len(staked_fractions[idx]) > 1:
+                        d_unstaked_value = (new_unstaked_pps - unstaked_pps) * (to_supply - to_staked) / 1e18
+                    else:
+                        d_unstaked_value = 0
+                    unstaked_pps = new_unstaked_pps
+                    unstaked_pnl[idx].append(unstaked_pnl[idx][-1] + d_unstaked_value)
+
+                    staked_fractions[idx].append(staked / supply)
+
+                    print(times[idx][-1], labels[idx])
+                    # XXX TODO debug value.staked vs balanceOf(staked)!
+
+    fig, ((ax_rel, ax_charged_admin, ax_staked_pnl), (ax_abs, ax_fair_admin, ax_unstaked_pnl)) = plt.subplots(2, 3, sharey=False, sharex=True)
 
     colors = ['orange', 'blue', 'gray']
     for idx in range(n):
@@ -162,11 +201,17 @@ def main():
     ax_charged_admin.plot(merged_times, admin_fees_sum, c="black")
     merged_times, fair_admin_fees_sum = merge_feeds(times, fair_admin_fees)
     ax_fair_admin.plot(merged_times, fair_admin_fees_sum, c="black")
+    merged_times, staked_pnl_sum = merge_feeds(times, staked_pnl)
+    ax_staked_pnl.plot(merged_times, staked_pnl_sum, c="black")
+    merged_times, unstaked_pnl_sum = merge_feeds(times, unstaked_pnl)
+    ax_unstaked_pnl.plot(merged_times, unstaked_pnl_sum, c="black")
 
     ax_rel.set_title("Relative growth")
     ax_abs.set_title("Net system profit [BTC]")
     ax_charged_admin.set_title("Admin fees charged [BTC]")
     ax_fair_admin.set_title("Correct admin fees [BTC]")
+    ax_staked_pnl.set_title("Staked PnL [BTC]")
+    ax_unstaked_pnl.set_title("Unstaked PnL [BTC]")
 
     ax_rel.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
     ax_rel.legend()
@@ -174,6 +219,7 @@ def main():
     ax_abs.tick_params("x", rotation=45)
     ax_charged_admin.tick_params("x", rotation=45)
     ax_fair_admin.tick_params("x", rotation=45)
+    ax_unstaked_pnl.tick_params("x", rotation=45)
 
     fig.tight_layout()
     plt.show()
