@@ -46,7 +46,7 @@ def main():
     mc = Contract("0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696")
 
     factory = Contract(FACTORY)
-    n = factory.market_count()
+    n = 3
     markets = [factory.markets(i) for i in range(n)]
     lts = [Contract(m[3]) for m in markets]
     amms = [Contract(m[2]) for m in markets]
