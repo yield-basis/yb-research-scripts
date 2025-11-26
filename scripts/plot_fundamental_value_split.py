@@ -204,7 +204,7 @@ def main():
         json.dump({
             'n': n,
             'blocks': tblocks,
-            'times': times,
+            'times': [[t.timestamp() for t in tt] for tt in times],
             'earned_profits': earned_profits,
             'admin_fees': admin_fees,
             'fair_admin_fees': fair_admin_fees,
