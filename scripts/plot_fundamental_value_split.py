@@ -14,11 +14,12 @@ from datetime import datetime
 from brownie import Contract, config
 from brownie import web3
 
+import json
+
 config['autofetch_sources'] = True
 
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
-# START_BLOCK = 23746000 - 50000  # For display tests
-START_BLOCK = 23434125 + 1000
+START_BLOCK = 23434125 + 1000  # <- XXX should we start closer to deployment?
 BATCH_SIZE = 500
 ADJUST = True
 
@@ -195,9 +196,21 @@ def main():
                     fair_admin_fees[idx].append(fair_admin_fees[idx][-1] + d_profit * f_a)
 
                     print(times[idx][-1], labels[idx])
-                    # XXX TODO debug value.staked vs balanceOf(staked)!
 
             admin_fees_withdrawn += sum(admin_fees_events.values()) * unstaked_pps
+
+    # Save all data
+    with open('pnl-log.json', 'w') as f:
+        json.dump({
+            'n': n,
+            'blocks': tblocks,
+            'times': times,
+            'earned_profits': earned_profits,
+            'admin_fees': admin_fees,
+            'fair_admin_fees': fair_admin_fees,
+            'staked_pnl': staked_pnl,
+            'unstaked_pnl': unstaked_pnl
+        }, f)
 
     fig, ((ax_rel, ax_charged_admin, ax_staked_pnl), (ax_abs, ax_fair_admin, ax_unstaked_pnl)) = plt.subplots(2, 3, sharey=False, sharex=True)
 
