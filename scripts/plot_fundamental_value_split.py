@@ -80,18 +80,22 @@ def main():
         staked_pps = None
         unstaked_pps = 1.0
         staked_deposits = None
+        admin_fees_withdrawn = 0
 
         for block in range(START_BLOCK, current_block - (BATCH_SIZE - 1), BATCH_SIZE):
             deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             withdrawals = lt.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             stakes = staker.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             unstakes = staker.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
+            waf = lt.events.WithdrawAdminFees.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
             blocks = set(
                     [ev['blockNumber'] for ev in deposits]
                     + [ev['blockNumber'] for ev in withdrawals]
                     + [ev['blockNumber'] for ev in stakes]
                     + [ev['blockNumber'] for ev in unstakes]
             )
+
+            admin_fees_events = {w['blockNumber']: w['args']['amount'] for w in waf}
 
             batch_end = min(current_block, block + BATCH_SIZE)
             blocks.add(block)
@@ -160,10 +164,6 @@ def main():
                     d_profit = to_value_adj - from_value_adj
                     earned_profits[idx].append(earned_profits[idx][-1] + d_profit)
 
-                    f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / supply)**0.5
-                    admin_fees[idx].append(liquidity[0] / 1e18)
-                    fair_admin_fees[idx].append(fair_admin_fees[idx][-1] + d_profit * f_a)
-
                     d_staked_value = 0
                     d_unstaked_value = 0
                     useful_value = to_value_adj * to_liquidity[1] / (to_liquidity[0] + to_liquidity[1])
@@ -186,8 +186,18 @@ def main():
 
                     staked_fractions[idx].append(staked / supply)
 
+                    f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / supply)**0.5
+                    admin_fees_addition = admin_fees_withdrawn + sum(v for b, v in admin_fees_events.items() if b <= to_block)
+                    admin_fees_addition *= unstaked_pps
+                    admin_fees[idx].append(
+                            (liquidity[0] + admin_fees_addition) / 1e18
+                    )
+                    fair_admin_fees[idx].append(fair_admin_fees[idx][-1] + d_profit * f_a)
+
                     print(times[idx][-1], labels[idx])
                     # XXX TODO debug value.staked vs balanceOf(staked)!
+
+            admin_fees_withdrawn += sum(admin_fees_events.values()) * unstaked_pps
 
     fig, ((ax_rel, ax_charged_admin, ax_staked_pnl), (ax_abs, ax_fair_admin, ax_unstaked_pnl)) = plt.subplots(2, 3, sharey=False, sharex=True)
 
