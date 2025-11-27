@@ -71,6 +71,8 @@ def main():
     staked_fractions = [[0.0] for i in range(n)]
     staked_pnl = [[0.0] for i in range(n)]
     unstaked_pnl = [[0.0] for i in range(n)]
+    staked_pps_values = [[1.0] for i in range(n)]
+    unstaked_pps_values = [[1.0] for i in range(n)]
 
     for idx in range(n):
         lt = lts[idx]
@@ -197,6 +199,9 @@ def main():
                     unstaked_pps = new_unstaked_pps
                     unstaked_pnl[idx].append(unstaked_pnl[idx][-1] + d_unstaked_value)
 
+                    staked_pps_values[idx].append(staked_pps)
+                    unstaked_pps_values[idx].append(unstaked_pps)
+
                     staked_fractions[idx].append(staked / (supply or 1))
 
                     f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / (supply or 1))**0.5
@@ -221,7 +226,9 @@ def main():
             'admin_fees': admin_fees,
             'fair_admin_fees': fair_admin_fees,
             'staked_pnl': staked_pnl,
-            'unstaked_pnl': unstaked_pnl
+            'unstaked_pnl': unstaked_pnl,
+            'staked_pps': staked_pps_values,
+            'unstaked_pps': unstaked_pps_values
         }, f)
 
     fig, ((ax_rel, ax_charged_admin, ax_staked_pnl), (ax_abs, ax_fair_admin, ax_unstaked_pnl)) = plt.subplots(2, 3, sharey=False, sharex=True)
