@@ -10,7 +10,7 @@ config['autofetch_sources'] = True
 
 PNL_LOG_FILE = "pnl-log.json"
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
-START_BLOCK = 23371071 + 1
+START_BLOCK = 23433457
 BATCH_SIZE = 500
 MARKET_IDS = [0, 1, 2]
 

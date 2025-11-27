@@ -19,7 +19,7 @@ import json
 config['autofetch_sources'] = True
 
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
-START_BLOCK = 23434125 + 1000  # <- XXX should we start closer to deployment?
+START_BLOCK = 23433457
 BATCH_SIZE = 500
 ADJUST = True
 
@@ -55,7 +55,7 @@ def main():
     stakers = [Contract(lt.staker()) for lt in lts]
     labels = [lt.symbol() for lt in lts]
 
-    current_block = web3.eth.block_number
+    max_block = web3.eth.block_number
     times = [[datetime.fromtimestamp(web3.eth.get_block(START_BLOCK).timestamp)] for i in range(n)]
     growth_oracle_values = [[1.0] for i in range(n)]
     growth_scale_values = [[1.0] for i in range(n)]
@@ -82,23 +82,27 @@ def main():
         unstaked_pps = 1.0
         staked_deposits = None
         admin_fees_withdrawn = 0
+        min_deposit_block = 10**10
 
-        for block in range(START_BLOCK, current_block - (BATCH_SIZE - 1), BATCH_SIZE):
-            deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
-            withdrawals = lt.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
-            stakes = staker.events.Deposit.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
-            unstakes = staker.events.Withdraw.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
-            waf = lt.events.WithdrawAdminFees.get_logs(fromBlock=block, toBlock=block+BATCH_SIZE-1)
+        for block in range(START_BLOCK, max_block, BATCH_SIZE):
+            to_block_b = min(block + BATCH_SIZE - 1, max_block)
+            deposits = lt.events.Deposit.get_logs(fromBlock=block, toBlock=to_block_b)
+            withdrawals = lt.events.Withdraw.get_logs(fromBlock=block, toBlock=to_block_b)
+            stakes = staker.events.Deposit.get_logs(fromBlock=block, toBlock=to_block_b)
+            unstakes = staker.events.Withdraw.get_logs(fromBlock=block, toBlock=to_block_b)
+            waf = lt.events.WithdrawAdminFees.get_logs(fromBlock=block, toBlock=to_block_b)
             blocks = set(
-                    [ev['blockNumber'] for ev in deposits]
-                    + [ev['blockNumber'] for ev in withdrawals]
-                    + [ev['blockNumber'] for ev in stakes]
-                    + [ev['blockNumber'] for ev in unstakes]
+                    [ev.blockNumber for ev in deposits]
+                    + [ev.blockNumber for ev in withdrawals]
+                    + [ev.blockNumber for ev in stakes]
+                    + [ev.blockNumber for ev in unstakes]
             )
+            if min_deposit_block == 10**10 and len(blocks) > 0:
+                min_deposit_block = min(blocks)
 
-            admin_fees_events = {w['blockNumber']: w['args']['amount'] for w in waf}
+            admin_fees_events = {w.blockNumber: w.args.amount for w in waf}
 
-            batch_end = min(current_block, block + BATCH_SIZE)
+            batch_end = min(max_block, block + BATCH_SIZE)
             blocks.add(block)
             blocks.add(batch_end)
             blocks = sorted(blocks)
@@ -111,55 +115,61 @@ def main():
 
                 if to_block > from_block:
                     with multicall(address=mc.address, block_identifier=from_block):
-                        from_value = amm.value_oracle()
+                        from_value = amm.value_oracle() if from_block >= min_deposit_block else [0, 0]
                         from_oracle = pool.price_oracle()
                         from_scale = pool.price_scale()
-                        from_xcp = pool.xcp_profit()
-                        from_vp = pool.get_virtual_price()
-                        from_debt = amm.get_debt()
-                        from_collateral = amm.collateral_amount()
-                        # from_liquidity = lt.liquidity()  # (admin, total, ideal_staked, staked)
-                        # from_staked = lt.balanceOf(staker)
-                        # from_supply = lt.totalSupply()
+                        from_xcp = pool.xcp_profit() if from_block >= min_deposit_block else 10**18
+                        from_vp = pool.get_virtual_price() if from_block >= min_deposit_block else 10**18
+                        from_debt = amm.get_debt() if from_block >= min_deposit_block else 0.0
+                        from_collateral = amm.collateral_amount() if from_block >= min_deposit_block else 0.0
 
                     with multicall(address=mc.address, block_identifier=to_block):
-                        to_value = amm.value_oracle()
+                        to_value = amm.value_oracle() if to_block >= min_deposit_block else [0, 0]
                         to_oracle = pool.price_oracle()
                         to_scale = pool.price_scale()
                         time = mc.getCurrentBlockTimestamp()
-                        to_xcp = pool.xcp_profit()
-                        to_vp = pool.get_virtual_price()
-                        to_debt = amm.get_debt()
-                        to_collateral = amm.collateral_amount()
-                        liquidity = to_liquidity = lt.liquidity()  # (admin, total, ideal_staked, staked)
-                        staked = to_staked = lt.balanceOf(staker)
-                        supply = to_supply = lt.totalSupply()
-                        min_admin_fee = lt.min_admin_fee()
-                        staker_supply = staker.totalSupply()
+                        to_xcp = pool.xcp_profit() if to_block >= min_deposit_block else 10**18
+                        to_vp = pool.get_virtual_price() if to_block >= min_deposit_block else 10**18
+                        to_debt = amm.get_debt() if to_block >= min_deposit_block else 0.0
+                        to_collateral = amm.collateral_amount() if to_block >= min_deposit_block else 0.0
+                        liquidity = to_liquidity = lt.liquidity() if to_block >= min_deposit_block else [0] * 4  # (admin, total, ideal_staked, staked)
+                        staked = to_staked = lt.balanceOf(staker) if to_block >= min_deposit_block else 0.0
+                        supply = to_supply = lt.totalSupply() if to_block >= min_deposit_block else 0.0
+                        min_admin_fee = lt.min_admin_fee() if to_block >= min_deposit_block else 0.0
+                        staker_supply = staker.totalSupply() if to_block >= min_deposit_block else 0.0
 
                     from_collateral = int(from_collateral * ((10**18 + from_xcp) / (2 * from_vp) if ADJUST else 1))
                     to_collateral = int(to_collateral * ((10**18 + to_xcp) / (2 * to_vp) if ADJUST else 1))
 
-                    from_value_adj = amm.value_oracle_for(from_collateral, from_debt, block_identifier=from_block)[1]
-                    to_value_adj = amm.value_oracle_for(to_collateral, to_debt, block_identifier=to_block)[1]
+                    from_value_adj = to_value_adj = 0
+                    if from_block >= min_deposit_block:
+                        from_value_adj = amm.value_oracle_for(from_collateral, from_debt, block_identifier=from_block)[1]
+                    if to_block >= min_deposit_block:
+                        to_value_adj = amm.value_oracle_for(to_collateral, to_debt, block_identifier=to_block)[1]
 
                     tblocks[idx].append(to_block)
                     times[idx].append(datetime.fromtimestamp(time))
 
-                    from_value_oracle = from_value[1] / from_oracle
-                    from_value_scale = from_value[1] / from_scale
-                    to_value_oracle = to_value[1] / to_oracle
-                    to_value_scale = to_value[1] / to_scale
-                    growth_oracle_mul = (to_value_oracle / from_value_oracle)
-                    scale_oracle_mul = (to_value_scale / from_value_scale)
-                    growth_oracle[idx] *= growth_oracle_mul
-                    growth_scale[idx] *= scale_oracle_mul
+                    from_value_oracle = from_value[1] / (from_oracle or 1)
+                    from_value_scale = from_value[1] / (from_scale or 1)
+                    to_value_oracle = to_value[1] / (to_oracle or 1)
+                    to_value_scale = to_value[1] / (to_scale or 1)
+                    if from_block >= min_deposit_block:
+                        growth_oracle_mul = (to_value_oracle / from_value_oracle)
+                        scale_oracle_mul = (to_value_scale / from_value_scale)
+                        growth_oracle[idx] *= growth_oracle_mul
+                        growth_scale[idx] *= scale_oracle_mul
                     growth_oracle_values[idx].append(growth_oracle[idx])
                     growth_scale_values[idx].append(growth_scale[idx])
 
-                    from_value_adj /= from_scale
-                    to_value_adj /= to_scale
-                    growth_mul_adj = to_value_adj / from_value_adj
+                    if from_block >= min_deposit_block:
+                        from_value_adj /= from_scale
+                    if to_block >= min_deposit_block:
+                        to_value_adj /= to_scale
+                    if from_block >= min_deposit_block:
+                        growth_mul_adj = to_value_adj / from_value_adj
+                    else:
+                        growth_mul_adj = 1
                     growth_scale_adj[idx] *= growth_mul_adj
                     growth_scale_values_adj[idx].append(growth_scale_adj[idx])
                     d_profit = to_value_adj - from_value_adj
@@ -167,17 +177,19 @@ def main():
 
                     d_staked_value = 0
                     d_unstaked_value = 0
-                    useful_value = to_value_adj * to_liquidity[1] / (to_liquidity[0] + to_liquidity[1])
+                    useful_value = 0
+                    if to_liquidity[1] > 0:
+                        useful_value = to_value_adj * to_liquidity[1] / (to_liquidity[0] + to_liquidity[1])
                     new_staked_pps = None
                     if staker_supply > 0:
                         new_staked_pps = useful_value * to_staked / to_supply / (staker_supply / 1e18)
                     if staked_pps is not None:
                         d_staked_value = staked_deposits * (new_staked_pps / staked_pps - 1)
-                    staked_deposits = useful_value * to_staked / to_supply
+                    staked_deposits = useful_value * to_staked / (to_supply or 1)
                     staked_pps = new_staked_pps
                     staked_pnl[idx].append(staked_pnl[idx][-1] + d_staked_value)
 
-                    new_unstaked_pps = useful_value / (to_supply / 1e18)
+                    new_unstaked_pps = useful_value / ((to_supply or 1e18) / 1e18)
                     if len(staked_fractions[idx]) > 1:
                         d_unstaked_value = (new_unstaked_pps - unstaked_pps) * (to_supply - to_staked) / 1e18
                     else:
@@ -185,9 +197,9 @@ def main():
                     unstaked_pps = new_unstaked_pps
                     unstaked_pnl[idx].append(unstaked_pnl[idx][-1] + d_unstaked_value)
 
-                    staked_fractions[idx].append(staked / supply)
+                    staked_fractions[idx].append(staked / (supply or 1))
 
-                    f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / supply)**0.5
+                    f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / (supply or 1))**0.5
                     admin_fees_addition = admin_fees_withdrawn + sum(v for b, v in admin_fees_events.items() if b <= to_block)
                     admin_fees_addition *= unstaked_pps
                     admin_fees[idx].append(
