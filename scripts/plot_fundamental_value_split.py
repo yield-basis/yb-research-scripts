@@ -82,6 +82,8 @@ def main():
 
         staked_pps = None
         unstaked_pps = 1.0
+        plain_staked_pps = None
+        plain_unstaked_pps = 1.0
         staked_deposits = None
         admin_fees_withdrawn = 0
         min_deposit_block = 10**10
@@ -124,6 +126,7 @@ def main():
                         from_vp = pool.get_virtual_price() if from_block >= min_deposit_block else 10**18
                         from_debt = amm.get_debt() if from_block >= min_deposit_block else 0.0
                         from_collateral = amm.collateral_amount() if from_block >= min_deposit_block else 0.0
+                        from_value_plain = amm.value_oracle() if from_block >= min_deposit_block else [0, 0]
 
                     with multicall(address=mc.address, block_identifier=to_block):
                         to_value = amm.value_oracle() if to_block >= min_deposit_block else [0, 0]
@@ -139,6 +142,7 @@ def main():
                         supply = to_supply = lt.totalSupply() if to_block >= min_deposit_block else 0.0
                         min_admin_fee = lt.min_admin_fee() if to_block >= min_deposit_block else 0.0
                         staker_supply = staker.totalSupply() if to_block >= min_deposit_block else 0.0
+                        to_value_plain = amm.value_oracle() if to_block >= min_deposit_block else [0, 0]
 
                     from_collateral = int(from_collateral * ((10**18 + from_xcp) / (2 * from_vp) if ADJUST else 1))
                     to_collateral = int(to_collateral * ((10**18 + to_xcp) / (2 * to_vp) if ADJUST else 1))
@@ -148,6 +152,8 @@ def main():
                         from_value_adj = amm.value_oracle_for(from_collateral, from_debt, block_identifier=from_block)[1]
                     if to_block >= min_deposit_block:
                         to_value_adj = amm.value_oracle_for(to_collateral, to_debt, block_identifier=to_block)[1]
+                    from_value_plain = from_value_plain[1] / from_scale
+                    to_value_plain = to_value_plain[1] / to_scale
 
                     tblocks[idx].append(to_block)
                     times[idx].append(datetime.fromtimestamp(time))
@@ -180,18 +186,23 @@ def main():
                     d_staked_value = 0
                     d_unstaked_value = 0
                     useful_value = 0
+                    plain_useful_value = 0
                     if to_liquidity[1] > 0:
                         useful_value = to_value_adj * to_liquidity[1] / (to_liquidity[0] + to_liquidity[1])
+                        plain_useful_value = to_value_plain * to_liquidity[1] / (to_liquidity[0] + to_liquidity[1])
                     new_staked_pps = None
                     if staker_supply > 0:
                         new_staked_pps = useful_value * to_staked / to_supply / (staker_supply / 1e18)
+                        plain_staked_pps = plain_useful_value * to_staked / to_supply / (staker_supply / 1e18)
                     if staked_pps is not None:
                         d_staked_value = staked_deposits * (new_staked_pps / staked_pps - 1)
                     staked_deposits = useful_value * to_staked / (to_supply or 1)
                     staked_pps = new_staked_pps
+
                     staked_pnl[idx].append(staked_pnl[idx][-1] + d_staked_value)
 
                     new_unstaked_pps = useful_value / ((to_supply or 1e18) / 1e18)
+                    plain_unstaked_pps = plain_useful_value / ((to_supply or 1e18) / 1e18)
                     if len(staked_fractions[idx]) > 1:
                         d_unstaked_value = (new_unstaked_pps - unstaked_pps) * (to_supply - to_staked) / 1e18
                     else:
@@ -199,8 +210,8 @@ def main():
                     unstaked_pps = new_unstaked_pps
                     unstaked_pnl[idx].append(unstaked_pnl[idx][-1] + d_unstaked_value)
 
-                    staked_pps_values[idx].append(staked_pps)
-                    unstaked_pps_values[idx].append(unstaked_pps)
+                    staked_pps_values[idx].append(plain_staked_pps)
+                    unstaked_pps_values[idx].append(plain_unstaked_pps)
 
                     staked_fractions[idx].append(staked / (supply or 1))
 
