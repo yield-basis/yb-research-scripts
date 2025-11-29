@@ -91,19 +91,24 @@ def main():
             user_pnl[idx][addr] = 0.0
             print(f'Processing {labels[idx]}:{addr}...', end='   ')
 
-            for b, staked_pps, unstaked_pps in zip(data['blocks'][idx], data['staked_pps'][idx], data['unstaked_pps'][idx]):
+            for b, staked_pps, unstaked_pps, unstaked_pnl, fair_unstaked_pnl in zip(
+                    data['blocks'][idx], data['staked_pps'][idx], data['unstaked_pps'][idx], data['unstaked_pnl'][idx], data['fair_unstaked_pnl'][idx]):
                 if staked_pps is None or staked_pps == 0:
                     staked_pps = 1.0
                 if unstaked_pps is None or unstaked_pps == 0:
                     unstaked_pps = 1.0
+
+                unstaked_pps_modified = unstaked_pps
+                if unstaked_pps > 1:
+                    unstaked_pps_modified = 1 + (unstaked_pps - 1) * (1 - fair_unstaked_pnl / unstaked_pnl)
  
                 if addr in lt_balances[idx]:
-                    user_pnl[idx][addr] += (unstaked_pps - prev_unstaked_pps) * lt_balances[idx][addr][b - b0]
+                    user_pnl[idx][addr] += (unstaked_pps_modified - prev_unstaked_pps) * lt_balances[idx][addr][b - b0]
                 if addr in st_balances[idx]:
                     user_pnl[idx][addr] += (staked_pps - prev_staked_pps) * st_balances[idx][addr][b - b0]
 
                 prev_staked_pps = staked_pps
-                prev_unstaked_pps = unstaked_pps
+                prev_unstaked_pps = unstaked_pps_modified
 
             print(f'PNL = {user_pnl[idx][addr]}')
 

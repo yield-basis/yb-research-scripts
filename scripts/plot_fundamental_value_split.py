@@ -71,6 +71,7 @@ def main():
     staked_fractions = [[0.0] for i in range(n)]
     staked_pnl = [[0.0] for i in range(n)]
     unstaked_pnl = [[0.0] for i in range(n)]
+    fair_unstaked_pnl = [[0.0] for i in range(n)]
     staked_pps_values = [[1.0] for i in range(n)]
     unstaked_pps_values = [[1.0] for i in range(n)]
 
@@ -223,6 +224,9 @@ def main():
                     )
                     fair_admin_fees[idx].append(fair_admin_fees[idx][-1] + d_profit * f_a)
 
+
+                    fair_unstaked_pnl[idx].append(earned_profits[idx][-1] - fair_admin_fees[idx][-1])
+
                     print(times[idx][-1], labels[idx])
 
             admin_fees_withdrawn += sum(admin_fees_events.values()) * unstaked_pps
@@ -238,6 +242,7 @@ def main():
             'fair_admin_fees': fair_admin_fees,
             'staked_pnl': staked_pnl,
             'unstaked_pnl': unstaked_pnl,
+            'fair_unstaked_pnl': fair_unstaked_pnl,
             'staked_pps': staked_pps_values,
             'unstaked_pps': unstaked_pps_values
         }, f)
@@ -258,6 +263,8 @@ def main():
     ax_staked_pnl.plot(merged_times, staked_pnl_sum, c="black")
     merged_times, unstaked_pnl_sum = merge_feeds(times, unstaked_pnl)
     ax_unstaked_pnl.plot(merged_times, unstaked_pnl_sum, c="black")
+    merged_times, fair_unstaked_pnl_sum = merge_feeds(times, fair_unstaked_pnl)
+    ax_unstaked_pnl.plot(merged_times, fair_unstaked_pnl_sum, c="gray")
 
     ax_rel.set_title("Relative growth")
     ax_abs.set_title("Net system profit [BTC]")
