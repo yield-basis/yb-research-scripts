@@ -217,8 +217,7 @@ def main():
                     staked_fractions[idx].append(staked / (supply or 1))
 
                     f_a = 1.0 - (1.0 - min_admin_fee / 1e18) * (1.0 - staked / (supply or 1))**0.5
-                    admin_fees_addition = admin_fees_withdrawn + sum(v for b, v in admin_fees_events.items() if b <= to_block)
-                    admin_fees_addition *= unstaked_pps
+                    admin_fees_addition = admin_fees_withdrawn + sum(v for b, v in admin_fees_events.items() if b <= to_block) * unstaked_pps
                     admin_fees[idx].append(
                             (liquidity[0] + admin_fees_addition) / 1e18
                     )
