@@ -18,7 +18,7 @@ for idx, name in enumerate(pool_names):
     overcharge = charged - fair
     loss = sum(-v for v in user_data[idx].values() if v < 0)
 
-    print(f'Pool {name} overcharged in admin fee: {overcharge:.4f} BTC')
+    print(f'Pool {name} overcharged in admin fee: {overcharge:.4f} BTC of charged {charged:.4f}')
     print(f'  - Staked users lost: {loss:.4f}')
     print(f'  - Fair admin fee: {fair:.4f}')
 
