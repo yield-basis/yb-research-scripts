@@ -9,16 +9,17 @@ from brownie import web3
 config['autofetch_sources'] = True
 
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
-START_BLOCK = 23434125
-N_POINTS = 1000
+# START_BLOCK = 23434125
+START_BLOCK = 23784145 + 100
+N_POINTS = 500
 
 
 def main():
     mc = Contract("0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696")
 
-    factory = Contract(FACTORY)
     n = 3
-    markets = [factory.markets(i) for i in range(n)]
+    factory = Contract(FACTORY)
+    markets = [factory.markets(i) for i in [3, 4, 5]]
     lts = [Contract(m[3]) for m in markets]
     amms = [Contract(m[2]) for m in markets]
     cryptopools = [Contract(amm.COLLATERAL()) for amm in amms]
@@ -61,5 +62,6 @@ def main():
     pylab.ylabel('Fraction of pool in crvUSD [%]')
     pylab.xticks(rotation=45, ha='right')
     pylab.legend()
+    pylab.grid()
     pylab.tight_layout()
     pylab.show()
