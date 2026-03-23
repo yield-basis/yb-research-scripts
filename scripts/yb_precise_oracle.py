@@ -14,7 +14,7 @@ config['autofetch_sources'] = True
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
 
 START_BLOCK = 23784145 + 100
-N_POINTS = 50
+N_POINTS = 500
 POOL_ID = 4
 
 
@@ -154,6 +154,7 @@ def main():
     factory = Contract(FACTORY)
     market = factory.markets(POOL_ID)
     amm = Contract(market[2])
+    lt = Contract(market[3])
     cryptopool = Contract(amm.COLLATERAL())
 
     current_block = web3.eth.block_number
@@ -173,26 +174,46 @@ def main():
             ps_lp_price = ps_lp_oracle.price()
             value_oracle = amm.value_oracle()
             yb_state = amm.get_state()
+            liquidity = lt.liquidity()
+            supply = lt.totalSupply()
 
         ps_lp_price /= 1e18
         value_oracle = value_oracle[1] / 1e18
+        supply /= 1e18
+
         collateral, debt, x0 = yb_state
         x0 /= 1e18
+        collateral /= 1e18
+        debt /= 1e18
+
+        admin, total, ideal_staked, staked = liquidity
+        f_lp = total / (admin + total)
 
         t = datetime.fromtimestamp(t)
         print(b, t)
         times.append(t)
-        portfolio_values.append(lp_oracle.get_price('actual_portfolio_value'))
-        oracle_values.append(lp_oracle.get_price('lp_price'))
+
+        lp_price_oracle = lp_oracle.get_price('lp_price')
+
+        L = 2
+        yb_oracle_value = x0 * (2 * L / (2*L - 1) * (lp_price_oracle / ps_lp_price)**0.5 - 1)
+        yb_oracle_value *= f_lp / supply / lp_oracle._price_oracle
+
+        oracle_values.append(yb_oracle_value)
+
+        redemption_value = lp_oracle.get_price('actual_portfolio_value') * collateral - debt
+        redemption_value *= f_lp / supply / lp_oracle._price_oracle
+        portfolio_values.append(redemption_value)
 
     pylab.plot(times, portfolio_values, c="black", label="Portfolio value")
-    pylab.plot(times, oracle_values, c="gray", label="LP oralce value")
+    pylab.plot(times, oracle_values, c="red", label="LP oralce value")
 
+    pylab.title(f'Price oracle for pool {lt.symbol()}')
     pylab.grid()
     pylab.legend()
     pylab.xticks(rotation=45, ha='right')
     pylab.xlabel('Time')
-    pylab.ylabel('LP price [USD]')
+    pylab.ylabel('LP price [pool asset]')
 
     pylab.tight_layout()
     pylab.show()
