@@ -13,9 +13,13 @@ config['autofetch_sources'] = True
 
 FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
 
-START_BLOCK = 23784145 + 100
 N_POINTS = 500
-POOL_ID = 4
+
+# START_BLOCK = 23784145 + 100
+# POOL_ID = 4
+
+START_BLOCK = 24183683 + 500
+POOL_ID = 6
 
 
 class FXSwapLPOracleSim:
