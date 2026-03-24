@@ -15,11 +15,11 @@ FACTORY = "0x370a449FeBb9411c95bf897021377fe0B7D100c0"
 
 N_POINTS = 500
 
-# START_BLOCK = 23784145 + 100
-# POOL_ID = 4
+START_BLOCK = 23784145 + 100
+POOL_ID = 4
 
-START_BLOCK = 24183683 + 500
-POOL_ID = 6
+# START_BLOCK = 24183683 + 500
+# POOL_ID = 6
 
 
 class FXSwapLPOracleSim:
@@ -159,6 +159,7 @@ def main():
     market = factory.markets(POOL_ID)
     amm = Contract(market[2])
     lt = Contract(market[3])
+    agg = Contract(lt.agg())
     cryptopool = Contract(amm.COLLATERAL())
 
     current_block = web3.eth.block_number
@@ -180,6 +181,7 @@ def main():
             yb_state = amm.get_state()
             liquidity = lt.liquidity()
             supply = lt.totalSupply()
+            agg_price = agg.price()
 
         ps_lp_price /= 1e18
         value_oracle = value_oracle[1] / 1e18
@@ -189,6 +191,8 @@ def main():
         x0 /= 1e18
         collateral /= 1e18
         debt /= 1e18
+
+        agg_price /= 1e18
 
         admin, total, ideal_staked, staked = liquidity
         f_lp = total / (admin + total)
@@ -201,7 +205,7 @@ def main():
 
         L = 2
         yb_oracle_value = x0 * (2 * L / (2*L - 1) * (lp_price_oracle / ps_lp_price)**0.5 - 1)
-        yb_oracle_value *= f_lp / supply / lp_oracle._price_oracle
+        yb_oracle_value *= f_lp / supply / (lp_oracle._price_oracle * agg_price)
 
         oracle_values.append(yb_oracle_value)
 
