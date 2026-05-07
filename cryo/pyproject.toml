@@ -1,0 +1,19 @@
+[project]
+name = "yb-cryo-analysis"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "cryo",
+    "matplotlib>=3.10.9",
+    "polars>=1.40.1",
+    "python-dotenv>=1.2.2",
+]
+
+[tool.uv.workspace]
+members = [
+    "build/cryo/crates/python",
+]
+
+[tool.uv.sources]
+cryo = { workspace = true }
