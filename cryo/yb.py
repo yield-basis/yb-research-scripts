@@ -1,0 +1,102 @@
+"""Traversal helpers for Yield Basis markets.
+
+Architecture:
+    Factory  →  Market[i] = (asset_token, cryptopool, amm, lt, price_oracle,
+                             virtual_pool, staker)
+    where:
+        amm          → LEVAMM (constant-leverage AMM, AMM.vy)
+        lt           → leveraged-token / borrow controller (LT.vy)
+        staker       → LiquidityGauge (dao/LiquidityGauge.vy, ERC4626 over LT)
+        cryptopool   → underlying Curve twocrypto pool
+        price_oracle → LP price oracle (CryptopoolLPOracle.vy)
+
+Factory ENS: factory.yieldbasis.eth
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from functools import cache
+
+from dotenv import load_dotenv
+from web3 import Web3
+
+load_dotenv()
+
+FACTORY_ENS = "factory.yieldbasis.eth"
+
+FACTORY_ABI = [
+    {
+        "name": "market_count",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"type": "uint256"}],
+    },
+    {
+        "name": "markets",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [{"name": "i", "type": "uint256"}],
+        "outputs": [
+            {
+                "type": "tuple",
+                "components": [
+                    {"name": "asset_token", "type": "address"},
+                    {"name": "cryptopool", "type": "address"},
+                    {"name": "amm", "type": "address"},
+                    {"name": "lt", "type": "address"},
+                    {"name": "price_oracle", "type": "address"},
+                    {"name": "virtual_pool", "type": "address"},
+                    {"name": "staker", "type": "address"},
+                ],
+            }
+        ],
+    },
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Market:
+    idx: int
+    asset_token: str
+    cryptopool: str
+    amm: str
+    lt: str
+    price_oracle: str
+    virtual_pool: str
+    staker: str
+
+
+@cache
+def w3() -> Web3:
+    rpc = os.environ["ETH_RPC_URL"]
+    client = Web3(Web3.HTTPProvider(rpc))
+    assert client.is_connected(), f"RPC not reachable: {rpc}"
+    return client
+
+
+@cache
+def factory_address() -> str:
+    addr = w3().ens.address(FACTORY_ENS)
+    if addr is None:
+        raise RuntimeError(f"Could not resolve ENS {FACTORY_ENS}")
+    return addr
+
+
+@cache
+def factory():
+    return w3().eth.contract(address=factory_address(), abi=FACTORY_ABI)
+
+
+def market_count() -> int:
+    return factory().functions.market_count().call()
+
+
+def get_market(i: int) -> Market:
+    raw = factory().functions.markets(i).call()
+    return Market(i, *raw)
+
+
+def all_markets() -> list[Market]:
+    return [get_market(i) for i in range(market_count())]

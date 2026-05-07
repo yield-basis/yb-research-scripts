@@ -8,6 +8,7 @@ dependencies = [
     "matplotlib>=3.10.9",
     "polars>=1.40.1",
     "python-dotenv>=1.2.2",
+    "web3>=7.16.0",
 ]
 
 [tool.uv.workspace]
