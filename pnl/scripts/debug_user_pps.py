@@ -397,16 +397,16 @@ def main() -> None:
         positions.append(pos)
     max_pos_atomic = max(positions)
     weighted_sum = 0.0
-    total_blocks = 0
+    active_blocks = 0
     for i in range(len(trajectory) - 1):
         b_curr = trajectory[i][0]
         b_next = trajectory[i + 1][0]
         duration = b_next - b_curr
-        if duration <= 0:
+        if duration <= 0 or positions[i] <= 0:
             continue
         weighted_sum += positions[i] * duration
-        total_blocks += duration
-    avg_pos_atomic = weighted_sum / total_blocks if total_blocks else 0
+        active_blocks += duration
+    avg_pos_atomic = weighted_sum / active_blocks if active_blocks else 0
 
     print()
     print(f"Max position size:        {max_pos_atomic / btc_scale:.8f} {sym}")

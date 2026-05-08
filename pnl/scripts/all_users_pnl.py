@@ -478,8 +478,11 @@ def main() -> None:
 
             pnl_lt_redem = pnl_g_redem = 0.0
             pnl_lt_pps = pnl_g_pps = 0.0
+            # avg_pos is the time-average position while ACTIVELY HOLDING
+            # (intervals with position == 0 are excluded), so it reads in
+            # BTC of typical position size, not "BTC across the full window".
             weighted_pos = 0.0
-            total_blocks = 0
+            active_blocks = 0
             for j in range(len(trajectory) - 1):
                 b_curr = trajectory[j][0]
                 b_next = trajectory[j + 1][0]
@@ -502,11 +505,12 @@ def main() -> None:
                 g_pps_p_n = cn["cta"] * lt_pps_p_n / PROBE_LT
                 pnl_lt_pps += lt_held * (lt_pps_p_n - lt_pps_p_c)
                 pnl_g_pps += g_held * (g_pps_p_n - g_pps_p_c)
-                weighted_pos += positions_redem[j] * duration
-                total_blocks += duration
+                if positions_redem[j] > 0:
+                    weighted_pos += positions_redem[j] * duration
+                    active_blocks += duration
 
             max_pos = max(positions_redem)
-            avg_pos = weighted_pos / total_blocks if total_blocks else 0
+            avg_pos = weighted_pos / active_blocks if active_blocks else 0
 
             yb_total_atomic = 0
             yb_crvusd_atomic = 0.0
