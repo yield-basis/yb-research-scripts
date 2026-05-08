@@ -151,24 +151,69 @@ def topic_to_addr(topic_hex: str) -> str:
 
 
 def fetch_logs_chunked(client, address, topics, start_block, end_block, label):
-    t0 = _time.time()
-    n_chunks = (end_block - start_block) // CHUNK + 1
-    logs = []
+    """eth_getLogs in 1000-block chunks, BATCH_SIZE chunks per HTTP POST.
+
+    Returns logs in a uniform shape: each log has bytes `topics[i]`, bytes
+    `data`, int `blockNumber`, int `logIndex` — same as web3.py would
+    return, so _decode_transfer doesn't care which transport was used.
+    """
+    # Pre-build the (from, to) windows.
+    chunks = []
     block = start_block
-    pbar = tqdm(total=n_chunks, desc=label, leave=False, unit="chunk")
     while block <= end_block:
         to = min(block + CHUNK - 1, end_block)
-        chunk_logs = _retry(
-            lambda: client.eth.get_logs({
-                "fromBlock": block,
-                "toBlock": to,
-                "address": Web3.to_checksum_address(address),
-                "topics": topics,
-            }),
-            label=f"get_logs {block}..{to}")
-        logs.extend(chunk_logs)
+        chunks.append((block, to))
         block = to + 1
-        pbar.update(1)
+
+    topics_for_rpc = [
+        ("0x" + t.hex() if isinstance(t, bytes) else t) for t in topics
+    ]
+    addr = Web3.to_checksum_address(address)
+    rpc_url = os.environ["ETH_RPC_URL"]
+    sess = requests.Session()
+
+    def _payload(req_id, from_b, to_b):
+        return {
+            "jsonrpc": "2.0", "id": req_id, "method": "eth_getLogs",
+            "params": [{
+                "fromBlock": hex(from_b),
+                "toBlock": hex(to_b),
+                "address": addr,
+                "topics": topics_for_rpc,
+            }],
+        }
+
+    def _normalize(raw):
+        d = raw["data"]
+        return {
+            "topics": [bytes.fromhex(t[2:]) for t in raw["topics"]],
+            "data": bytes.fromhex(d[2:]) if d != "0x" else b"",
+            "blockNumber": int(raw["blockNumber"], 16),
+            "logIndex": int(raw["logIndex"], 16),
+        }
+
+    logs = []
+    t0 = _time.time()
+    pbar = tqdm(total=len(chunks), desc=label, leave=False, unit="chunk")
+    for batch_start in range(0, len(chunks), BATCH_SIZE):
+        batch = chunks[batch_start:batch_start + BATCH_SIZE]
+        payload = [_payload(j, fb, tb) for j, (fb, tb) in enumerate(batch)]
+        resp = _retry(
+            lambda payload=payload: sess.post(rpc_url, json=payload, timeout=180),
+            label=f"getLogs {batch[0][0]}..{batch[-1][1]}")
+        resp.raise_for_status()
+        results = resp.json()
+        if not isinstance(results, list):
+            raise RuntimeError(f"non-list eth_getLogs response: {results}")
+        by_id = {r["id"]: r for r in results}
+        for j in range(len(batch)):
+            r = by_id[j]
+            if "result" not in r:
+                raise RuntimeError(f"eth_getLogs error in chunk "
+                                   f"{batch[j][0]}..{batch[j][1]}: {r.get('error')}")
+            for raw_log in r["result"]:
+                logs.append(_normalize(raw_log))
+        pbar.update(len(batch))
     pbar.close()
     _log(f"  ← {label}: {len(logs)} logs in {_time.time() - t0:.1f}s")
     return logs
