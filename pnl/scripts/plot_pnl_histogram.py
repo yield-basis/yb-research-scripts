@@ -1,12 +1,9 @@
-"""Histogram of per-user relative PnL (net_pnl_redem / avg_pos).
+"""Histogram of per-user relative PnL (net_pnl_redem / avg_pos), in matplotlib.
 
-Reads pnl_all_users.csv produced by all_users_pnl.py and plots:
-  - a console histogram via plotille (unicode-block bars)
-  - a matplotlib PNG (pnl_histogram.png)
-
-Each row in the CSV is one (market, user). The displayed metric is
-unitless: how big the user's net PnL is relative to their time-weighted
-average position size.
+Reads pnl_all_users.csv produced by all_users_pnl.py. The displayed metric
+is unitless: how big the user's net PnL is relative to their time-weighted
+average position size. NB: this is *absolute* (not annualized) return over
+each user's individual holding period.
 
 Usage:
     uv run python scripts/plot_pnl_histogram.py [CSV_PATH] [--low L --high H]
@@ -15,13 +12,10 @@ from __future__ import annotations
 
 import sys
 
-import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
-import plotille
 import polars as pl
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 
 def main() -> None:
@@ -46,29 +40,34 @@ def main() -> None:
     inside = df.filter((pl.col("rel") >= low) & (pl.col("rel") <= high))
     clip_lo = (df["rel"] < low).sum()
     clip_hi = (df["rel"] > high).sum()
-    vals = inside["rel"].to_list()
+    vals = inside["rel"].to_numpy()
+    median = float(np.median(vals))
+    mean = float(np.mean(vals))
 
-    print(f"CSV: {csv_path}  ({len(df)} non-trivial users)")
-    print(f"\nDistribution: net_pnl_redem / avg_pos  (relative return per user)")
-    print(plotille.hist(vals, bins=20, width=70, lc="cyan"))
-    print(f"  median: {np.median(vals):+.3f}    mean: {np.mean(vals):+.3f}    std: {np.std(vals):.3f}")
-    print(f"  inside [{low:+.2f}, {high:+.2f}]: {len(vals)};  "
-          f"clipped: {clip_lo} below, {clip_hi} above")
+    print(f"CSV: {csv_path}  (non-trivial users: {len(df)}, "
+          f"shown: {len(vals)}, clipped: {clip_lo} below / {clip_hi} above)")
+    print(f"  median: {median:+.1%}    mean: {mean:+.1%}    std: {np.std(vals):.1%}")
 
-    out_png = "pnl_histogram.png"
-    plt.figure(figsize=(10, 5))
-    plt.hist(vals, bins=20, range=(low, high), edgecolor="black", alpha=0.8)
-    plt.axvline(0, color="red", linestyle="--", linewidth=1, label="0")
-    plt.axvline(np.median(vals), color="green", linestyle=":", linewidth=1,
-                label=f"median={np.median(vals):+.3f}")
-    plt.xlabel("net_pnl_redem / avg_pos (unitless return)")
-    plt.ylabel("# users")
-    plt.title(f"YB markets: per-user PnL relative to avg position size (n={len(vals)})")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(out_png, dpi=120)
-    print(f"\nSaved {out_png}")
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.hist(vals, bins=20, range=(low, high), edgecolor="black", alpha=0.85)
+    ax.axvline(0, color="red", linestyle="--", linewidth=1, label="0%")
+    ax.axvline(median, color="green", linestyle=":", linewidth=1.5,
+               label=f"median = {median:+.1%}")
+    ax.axvline(mean, color="orange", linestyle=":", linewidth=1.5,
+               label=f"mean = {mean:+.1%}")
+    ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1, decimals=0))
+    ax.set_xlabel("Net PnL as % of average position size  (absolute, not annualized)")
+    ax.set_ylabel("# users")
+    ax.set_title(
+        f"YB markets 3–6: per-user PnL distribution  "
+        f"(n={len(vals)}; clipped {clip_lo}<{low:+.0%}, {clip_hi}>{high:+.0%})"
+    )
+    ax.legend()
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig("pnl_histogram.png", dpi=120)
+    print("Saved pnl_histogram.png")
+    plt.show()
 
 
 if __name__ == "__main__":

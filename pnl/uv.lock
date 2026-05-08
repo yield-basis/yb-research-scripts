@@ -1167,15 +1167,6 @@ wheels = [
 ]
 
 [[package]]
-name = "plotille"
-version = "6.0.5"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/46/51/a6093145179139e7dffc01aa499b0169c91154a743197a3fd16252a9e90d/plotille-6.0.5.tar.gz", hash = "sha256:26d2cef5d4feb8632c9710442ad49fc57f9d5b20881c21ac7954c76208b5600b", size = 58167, upload-time = "2026-02-17T14:30:31.323Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/b7/a098cacb7f81f617157cb9c9c7c5ac66b6ac886075722d443e8e25b5a4b8/plotille-6.0.5-py3-none-any.whl", hash = "sha256:c35be42f8aa080853904d123894194a5ea7e095bdeb76d7b61fd41c89cdeaeee", size = 62532, upload-time = "2026-02-17T14:30:30.235Z" },
-]
-
-[[package]]
 name = "polars"
 version = "1.40.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1815,7 +1806,6 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "matplotlib" },
-    { name = "plotille" },
     { name = "polars" },
     { name = "python-dotenv" },
     { name = "tqdm" },
@@ -1825,7 +1815,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.9" },
-    { name = "plotille", specifier = ">=6.0.5" },
     { name = "polars", specifier = ">=1.40.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "tqdm", specifier = ">=4.67.3" },
