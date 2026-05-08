@@ -10,12 +10,19 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import sys
 
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-import numpy as np
-import polars as pl
+import matplotlib
+
+# QtAgg via pyqt6 — single pip dep with bundled Qt binaries, no system
+# rebuild needed. The system default GTK4Cairo backend would need both
+# pycairo and PyGObject and a working GTK4 stack.
+matplotlib.use("QtAgg")
+import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker as mticker  # noqa: E402
+import numpy as np  # noqa: E402
+import polars as pl  # noqa: E402
 
 
 def main() -> None:
@@ -65,8 +72,10 @@ def main() -> None:
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
+
     fig.savefig("pnl_histogram.png", dpi=120)
     print("Saved pnl_histogram.png")
+
     plt.show()
 
 

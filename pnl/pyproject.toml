@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.10.9",
     "polars>=1.40.1",
+    "pyqt6>=6.11.0",
     "python-dotenv>=1.2.2",
     "tqdm>=4.67.3",
     "web3>=7.16.0",
