@@ -383,19 +383,46 @@ def main() -> None:
 
     pnl_lt_btc = pnl_lt_atomic / btc_scale
     pnl_gauge_btc = pnl_gauge_atomic / btc_scale
+
+    # Position-size summary: BTC value at each trajectory block, and a
+    # time-weighted (block-weighted) average across the full period.
+    # position_atomic = lt_balance × lt_pps + gauge_balance × gauge_pps
+    positions = []  # parallel to trajectory: BTC-atomic value at each event
+    for b, lt_bal, g_bal in trajectory:
+        pw, cta = pps_cache[b]
+        pos = lt_bal * pw // PROBE_LT + g_bal * cta * pw // (PROBE_LT * PROBE_LT)
+        positions.append(pos)
+    max_pos_atomic = max(positions)
+    weighted_sum = 0
+    total_blocks = 0
+    for i in range(len(trajectory) - 1):
+        b_curr = trajectory[i][0]
+        b_next = trajectory[i + 1][0]
+        duration = b_next - b_curr
+        if duration <= 0:
+            continue
+        weighted_sum += positions[i] * duration
+        total_blocks += duration
+    avg_pos_atomic = weighted_sum // total_blocks if total_blocks else 0
+
     print()
+    print(f"Max position size:        {max_pos_atomic / btc_scale:.8f} {sym}")
+    print(f"Avg position size (time): {avg_pos_atomic / btc_scale:.8f} {sym}")
     print(f"PnL on LT positions:      {pnl_lt_btc:+.8f} {sym}")
     print(f"PnL on gauge positions:   {pnl_gauge_btc:+.8f} {sym}")
 
     # ---- YB rewards earned by this user (gauge stakers receive YB) ----
     #
-    # Fetch every YB.Transfer where the user is the receiver. Each receipt
-    # is priced at YB_POOL.price_oracle() at that block (crvUSD per YB, 1e18).
-    # The market's underlying cryptopool gives BTC price in crvUSD, so we
-    # also report YB value in BTC-equivalent for direct comparison.
+    # Filter strictly to YB.Transfer(sender=gauge, receiver=user) — anyone
+    # can send YB, so without the gauge-sender filter we'd lump in DEX
+    # trades, OTC transfers, etc.
+    # Each receipt is priced at YB_POOL.price_oracle() (crvUSD per YB, 1e18)
+    # and converted to BTC via the market's cryptopool price_oracle.
+    gauge_topic = topic_addr(market.staker)
     yb_t_to = fetch_logs_chunked(
-        client, YB_TOKEN, topics_with_user(TRANSFER_TOPIC, 2, user_topic),
-        start_block, end_block, "YB.Transfer (receiver=user)")
+        client, YB_TOKEN,
+        [TRANSFER_TOPIC, gauge_topic, user_topic],
+        start_block, end_block, "YB.Transfer (gauge → user)")
 
     yb_value_crvusd_atomic = 0
     yb_value_btc_atomic = 0
