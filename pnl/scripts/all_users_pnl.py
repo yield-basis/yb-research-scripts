@@ -95,7 +95,7 @@ PPS_FLUSH_EVERY = 500  # write PPS cache to disk every N blocks
 # JSON-RPC batch size for eth_call sampling. Bench (scripts/bench_rpc.py)
 # showed 20 is the sweet spot on the local node — node caps batches at
 # ~100-150 and shows scheduling pathologies at certain mid sizes.
-BATCH_SIZE = 20
+BATCH_SIZE = 100
 
 
 def _log(msg: str) -> None:
@@ -296,25 +296,42 @@ def main() -> None:
         _save_pickle(events_path, market_events)
         _log(f"Saved events to {events_path}")
 
-    # Per-market user_deltas / user_yb
+    # Per-market user_deltas / user_yb. Excluded addresses (NOT real users):
+    #   - 0x0           mint/burn pseudo-address
+    #   - staker        gauge contract holds LT on behalf of stakers
+    #   - lt            defensive: LT contract itself, in case anything
+    #                   ever ends up holding its own token
     market_user_deltas: dict[int, dict[str, list]] = {}
     market_user_yb: dict[int, dict[str, list]] = {}
     for idx, c in ctx_by_idx.items():
-        EXCLUDE = {ZERO_ADDR, c["market"].staker.lower()}
+        EXCLUDE = {
+            ZERO_ADDR,
+            c["market"].staker.lower(),
+            c["market"].lt.lower(),
+        }
         user_deltas: dict[str, list] = defaultdict(list)
+        n_skipped = 0
         lt_t, g_t, yb_t = market_events[idx]
         for lg in lt_t:
             b, lidx, sender, receiver, value = _decode_transfer(lg)
             if sender not in EXCLUDE:
                 user_deltas[sender].append((b, lidx, -value, 0))
+            else:
+                n_skipped += 1
             if receiver not in EXCLUDE:
                 user_deltas[receiver].append((b, lidx, value, 0))
+            else:
+                n_skipped += 1
         for lg in g_t:
             b, lidx, sender, receiver, value = _decode_transfer(lg)
             if sender not in EXCLUDE:
                 user_deltas[sender].append((b, lidx, 0, -value))
+            else:
+                n_skipped += 1
             if receiver not in EXCLUDE:
                 user_deltas[receiver].append((b, lidx, 0, value))
+            else:
+                n_skipped += 1
         market_user_deltas[idx] = user_deltas
 
         user_yb: dict[str, list] = defaultdict(list)
@@ -324,6 +341,12 @@ def main() -> None:
                 continue
             user_yb[receiver].append((b, value))
         market_user_yb[idx] = user_yb
+
+        # Sanity check: gauge address should never appear as a user.
+        gauge_lc = c["market"].staker.lower()
+        assert gauge_lc not in user_deltas, f"gauge {gauge_lc} leaked into M{idx} users"
+        _log(f"  M{idx}: skipped {n_skipped} transfers involving "
+             f"{len(EXCLUDE)} excluded addresses (gauge / LT / 0x0)")
 
         print(f"  M{idx}: {len(user_deltas)} users / {len(user_yb)} YB receipt-users")
 
