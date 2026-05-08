@@ -30,7 +30,9 @@ import time as _time
 from collections import defaultdict
 
 import polars as pl
+import requests
 from dotenv import load_dotenv
+from eth_abi import decode as abi_decode
 from tqdm import tqdm
 from web3 import Web3
 
@@ -89,6 +91,11 @@ CHUNK = 1000
 
 CACHE_DIR = "cache"
 PPS_FLUSH_EVERY = 500  # write PPS cache to disk every N blocks
+
+# JSON-RPC batch size for eth_call sampling. Bench (scripts/bench_rpc.py)
+# showed 20 is the sweet spot on the local node — node caps batches at
+# ~100-150 and shows scheduling pathologies at certain mid sizes.
+BATCH_SIZE = 20
 
 
 def _log(msg: str) -> None:
@@ -180,19 +187,24 @@ def _decode_transfer(lg):
 
 def main() -> None:
     args = sys.argv[1:]
-    if "--out" in args:
-        i = args.index("--out")
-        output_csv = args[i + 1]
-        args = args[:i] + args[i + 2:]
-    else:
-        output_csv = "pnl_all_users.csv"
+    output_csv = "pnl_all_users.csv"
+    end_block_override = None
+    while "--out" in args or "--end-block" in args:
+        if "--out" in args:
+            i = args.index("--out")
+            output_csv = args[i + 1]
+            args = args[:i] + args[i + 2:]
+        if "--end-block" in args:
+            i = args.index("--end-block")
+            end_block_override = int(args[i + 1])
+            args = args[:i] + args[i + 2:]
     market_indices = [int(a) for a in args]
     if not market_indices:
         print(__doc__)
         sys.exit(1)
 
     client = w3()
-    end_block = client.eth.block_number
+    end_block = end_block_override if end_block_override else client.eth.block_number
     all_mks = {m.idx: m for m in all_markets()}
 
     # Per-market context
@@ -314,26 +326,56 @@ def main() -> None:
 
     todo = [b for b in sorted_blocks if b not in cache]
     _log(f"{len(base_calls)} metrics/block × {len(todo)} blocks remaining "
-         f"({len(sorted_blocks) - len(todo)} cached)")
+         f"({len(sorted_blocks) - len(todo)} cached); batch_size={BATCH_SIZE}")
+
+    # Encode the aggregate3 calldata once — same for every block, only the
+    # block_identifier varies. Then send N eth_calls per HTTP POST as a
+    # JSON-RPC batch.
+    agg_calldata = mc3.functions.aggregate3(base_calls)._encode_transaction_data()
+    rpc_url = os.environ["ETH_RPC_URL"]
+    sess = requests.Session()
+
+    def _decode_agg3_return(hex_str: str) -> list[tuple[bool, bytes]]:
+        ret_bytes = bytes.fromhex(hex_str[2:] if hex_str.startswith("0x") else hex_str)
+        return abi_decode(["(bool,bytes)[]"], ret_bytes)[0]
+
     pbar = tqdm(total=len(todo), desc="PPS sampling", unit="block")
-    for i, b in enumerate(todo):
-        rets = _retry(
-            lambda b=b: mc3.functions.aggregate3(base_calls).call(block_identifier=b),
-            label=f"multicall@{b}")
-        per_market = {}
-        for idx in market_indices:
-            o = market_offsets[idx]
-            per_market[idx] = {
-                "pps": int.from_bytes(rets[o + 0][1], "big") if rets[o + 0][0] else 0,
-                "pw":  int.from_bytes(rets[o + 1][1], "big") if rets[o + 1][0] else 0,
-                "cta": int.from_bytes(rets[o + 2][1], "big") if rets[o + 2][0] else 0,
-                "btc": int.from_bytes(rets[o + 3][1], "big") if rets[o + 3][0] else 0,
-            }
-        per_market["yb"] = int.from_bytes(rets[yb_offset][1], "big") if rets[yb_offset][0] else 0
-        cache[b] = per_market
-        pbar.update(1)
-        if (i + 1) % PPS_FLUSH_EVERY == 0:
-            _save_pickle(pps_path, cache)
+    n_processed = 0
+    for batch_start in range(0, len(todo), BATCH_SIZE):
+        batch_blocks = todo[batch_start:batch_start + BATCH_SIZE]
+        payload = [
+            {"jsonrpc": "2.0", "id": j, "method": "eth_call",
+             "params": [{"to": MULTICALL3, "data": agg_calldata}, hex(b)]}
+            for j, b in enumerate(batch_blocks)
+        ]
+        response = _retry(
+            lambda payload=payload: sess.post(rpc_url, json=payload, timeout=120),
+            label=f"batch@{batch_blocks[0]}..{batch_blocks[-1]}")
+        response.raise_for_status()
+        results = response.json()
+        if not isinstance(results, list):
+            raise RuntimeError(f"non-list batch response: {results}")
+        by_id = {r["id"]: r for r in results}
+        for j, b in enumerate(batch_blocks):
+            r = by_id[j]
+            if "result" not in r:
+                raise RuntimeError(f"eth_call error at block {b}: {r.get('error')}")
+            decoded = _decode_agg3_return(r["result"])
+            per_market = {}
+            for idx in market_indices:
+                o = market_offsets[idx]
+                per_market[idx] = {
+                    "pps": int.from_bytes(decoded[o + 0][1], "big") if decoded[o + 0][0] else 0,
+                    "pw":  int.from_bytes(decoded[o + 1][1], "big") if decoded[o + 1][0] else 0,
+                    "cta": int.from_bytes(decoded[o + 2][1], "big") if decoded[o + 2][0] else 0,
+                    "btc": int.from_bytes(decoded[o + 3][1], "big") if decoded[o + 3][0] else 0,
+                }
+            per_market["yb"] = int.from_bytes(decoded[yb_offset][1], "big") if decoded[yb_offset][0] else 0
+            cache[b] = per_market
+            n_processed += 1
+            pbar.update(1)
+            if n_processed % PPS_FLUSH_EVERY == 0:
+                _save_pickle(pps_path, cache)
     pbar.close()
     _save_pickle(pps_path, cache)
 
