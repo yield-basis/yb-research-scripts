@@ -53,6 +53,22 @@ FACTORY_ABI = [
             }
         ],
     },
+    {
+        "name": "MarketParameters",
+        "type": "event",
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "name": "idx", "type": "uint256"},
+            {"indexed": True, "name": "asset_token", "type": "address"},
+            {"indexed": True, "name": "cryptopool", "type": "address"},
+            {"indexed": False, "name": "amm", "type": "address"},
+            {"indexed": False, "name": "lt", "type": "address"},
+            {"indexed": False, "name": "price_oracle", "type": "address"},
+            {"indexed": False, "name": "virtual_pool", "type": "address"},
+            {"indexed": False, "name": "staker", "type": "address"},
+            {"indexed": False, "name": "agg", "type": "address"},
+        ],
+    },
 ]
 
 
@@ -100,3 +116,22 @@ def get_market(i: int) -> Market:
 
 def all_markets() -> list[Market]:
     return [get_market(i) for i in range(market_count())]
+
+
+@cache
+def market_deploy_block(idx: int) -> int:
+    """First block where market[idx]'s LT contract has code on chain.
+
+    Binary search on eth_getCode (~25 RPC calls). We avoid eth_getLogs
+    because some nodes cap the filter range at 1000 blocks.
+    """
+    market = get_market(idx)
+    client = w3()
+    low, high = 0, client.eth.block_number
+    while low < high:
+        mid = (low + high) // 2
+        if client.eth.get_code(market.lt, block_identifier=mid) == b"":
+            low = mid + 1
+        else:
+            high = mid
+    return low

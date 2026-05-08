@@ -1,5 +1,0 @@
-# PyO3 0.20 (pinned by upstream cryo) predates Python 3.13. The forward-compat
-# flag tells the build to trust that 3.13 is API-compatible with 3.12.
-# Cargo picks up [env] when invoked from this project tree.
-[env]
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"
