@@ -61,6 +61,7 @@ RESCUE_SIGS = [
     "rescueERC20(address,uint256)",
     "rescueERC20(address,address)",
     "rescueERC20(address,address,uint256)",
+    "rescueERC20(address,uint256,address)",      # arg-order variant (0x77662ffc)
     "rescueETH()",
     "rescueETH(uint256)",
     "rescueETH(address)",
@@ -91,6 +92,9 @@ RESCUE_SIGS = [
     "transferToken(address,address,uint256)",
     "transferERC20(address,uint256)",
     "transferERC20(address,address,uint256)",
+    "transferERC20Tokens(address,address,uint256)",   # SafeMoon-style (0xc41c9a61)
+    "transferTokens(address[],address[],uint256[])",
+    "transferERC20Token(address,address,uint256)",
     "saveToken(address,address,uint256)",
     "skim(address)",                 # Uniswap-style
     "inCaseTokensGetStuck(address)", # Yearn
@@ -100,10 +104,13 @@ RESCUE_SIGS = [
     "reclaim(address,uint256)",
     "reclaimToken(address)",
     "withdraw(address,uint256)",     # generic but address arg → token rescue
+    "withdraw(address,uint256,address)",
+    "withdraw(address[],uint256[],address)",  # multi-token rescue (0x26f91506)
     "withdrawAll(address)",           # token-targeted
     # Smart-wallet / multisig escape hatches
     "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
     "execute(address,uint256,bytes)",
+    "execute(bytes32[],bytes[])",          # governance/multisig batched (0xde792d5f)
     "executeBatch(address[],uint256[],bytes[])",
 ]
 RESCUE_SELECTORS = [Web3.keccak(text=s)[:4] for s in RESCUE_SIGS]
