@@ -30,6 +30,17 @@ FACTORY_ENS = "factory.yieldbasis.eth"
 # Block timestamp: 2025-10-15 09:42:23 UTC (Unix 1760521343).
 AIRDROP_1_BLOCK = 23582267
 
+# Addresses to exclude from per-user PnL analysis even though they hold LT
+# tokens. These are non-user contracts where the LT (and any YB rewards
+# claimed on its behalf) are unrescuable — counting them inflates loss
+# totals against addresses that aren't really "users".
+EXCLUDED_WALLETS = [
+    # Uniswap v4 hook with no token-rescue function in its ABI; verified
+    # via classify_users.py + Etherscan ABI inspection.
+    "0x000000000004444c5dc75cb358380d2e3de08a90",
+]
+EXCLUDED_WALLETS = [a.lower() for a in EXCLUDED_WALLETS]
+
 FACTORY_ABI = [
     {
         "name": "market_count",

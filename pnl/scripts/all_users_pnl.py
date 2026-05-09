@@ -37,7 +37,14 @@ from tqdm import tqdm
 from web3 import Web3
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from yb import all_markets, fee_receiver, market_deploy_block, rpc_url, w3  # noqa: E402
+from yb import (  # noqa: E402
+    EXCLUDED_WALLETS,
+    all_markets,
+    fee_receiver,
+    market_deploy_block,
+    rpc_url,
+    w3,
+)
 
 load_dotenv()
 
@@ -297,13 +304,20 @@ def main() -> None:
         _log(f"Saved events to {events_path}")
 
     # Per-market user_deltas / user_yb. Excluded addresses (NOT real users):
-    #   - 0x0             mint/burn pseudo-address
-    #   - staker          gauge contract holds LT on behalf of stakers
-    #   - lt              defensive: LT contract itself
-    #   - fee_receiver    FeeDistributor — protocol contract that holds LT
-    #                     pending distribution to veYB holders
+    #   - 0x0                mint/burn pseudo-address
+    #   - staker             gauge contract holds LT on behalf of stakers
+    #   - lt                 defensive: LT contract itself
+    #   - fee_receiver       FeeDistributor — protocol contract that holds
+    #                        LT pending distribution to veYB holders
+    #   - EXCLUDED_WALLETS   contracts where deposited LT and any YB
+    #                        rewards are unrescuable (e.g. a Uniswap v4
+    #                        hook lacking any token-rescue function)
     fee_dist = fee_receiver().lower()
-    print(f"\nExcluding fee_receiver (FeeDistributor) = {fee_dist}\n")
+    print(f"\nExcluding fee_receiver (FeeDistributor) = {fee_dist}")
+    print(f"Excluding {len(EXCLUDED_WALLETS)} hard-coded wallet(s):")
+    for a in EXCLUDED_WALLETS:
+        print(f"  {a}")
+    print()
     market_user_deltas: dict[int, dict[str, list]] = {}
     market_user_yb: dict[int, dict[str, list]] = {}
     for idx, c in ctx_by_idx.items():
@@ -312,6 +326,7 @@ def main() -> None:
             c["market"].staker.lower(),
             c["market"].lt.lower(),
             fee_dist,
+            *EXCLUDED_WALLETS,
         }
         user_deltas: dict[str, list] = defaultdict(list)
         n_skipped = 0
