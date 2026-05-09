@@ -46,64 +46,130 @@ SEL_AGGREGATE3 = Web3.keccak(text="aggregate3((address,bool,bytes)[])")[:4]
 # contract. Presence in bytecode (as PUSH4 immediate) means SOMEONE can
 # rescue stuck tokens; absence means stuck-forever.
 RESCUE_SIGS = [
-    "rescueERC20(address,uint256)",
-    "rescueERC20(address,address,uint256)",
+    # rescue / rescueToken / rescueERC20 / rescueTokens variants
+    "rescue(address)",
     "rescue(address,uint256)",
+    "rescue(address,address)",
     "rescue(address,address,uint256)",
+    "rescueToken(address)",
     "rescueToken(address,uint256)",
+    "rescueToken(address,address)",
     "rescueToken(address,address,uint256)",
+    "rescueTokens(address)",
+    "rescueTokens(address[])",
+    "rescueERC20(address)",
+    "rescueERC20(address,uint256)",
+    "rescueERC20(address,address)",
+    "rescueERC20(address,address,uint256)",
+    "rescueETH()",
+    "rescueETH(uint256)",
+    "rescueETH(address)",
+    "rescueETH(address,uint256)",
+    "rescue_tokens(address)",        # snake_case (Vyper)
+    "rescue_token(address)",
+    "recover(address,uint256)",
+    "recover(address,address,uint256)",
+    "recoverToken(address)",
+    "recoverToken(address,uint256)",
+    "recoverToken(address,address,uint256)",
+    "recoverTokens(address)",
+    "recoverTokens(address[])",
+    "recoverERC20(address,uint256)",
+    "recoverERC20(address,address,uint256)",
+    "recover_tokens(address)",       # YB HybridVault (Vyper)
     "sweep(address)",
     "sweep(address,uint256)",
     "sweep(address,address,uint256)",
+    "sweepToken(address)",
+    "sweepToken(address,uint256)",
     "sweepToken(address,address,uint256)",
-    "recoverERC20(address,uint256)",
-    "recoverERC20(address,address,uint256)",
-    "recoverToken(address,uint256)",
-    "recoverToken(address,address,uint256)",
-    "recover(address,uint256)",
-    "recover(address,address,uint256)",
-    "recover_tokens(address)",            # YB HybridVault
     "withdrawERC20(address,uint256)",
     "withdrawERC20(address,address,uint256)",
     "withdrawToken(address,uint256)",
     "withdrawToken(address,address,uint256)",
+    "withdrawTokens(address[])",
     "transferToken(address,address,uint256)",
-    "inCaseTokensGetStuck(address)",      # Yearn
-    "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",  # Safe
-    "execute(address,uint256,bytes)",     # generic smart wallets / 4337
-    "executeBatch(address[],uint256[],bytes[])",  # 4337 batched
+    "transferERC20(address,uint256)",
+    "transferERC20(address,address,uint256)",
+    "saveToken(address,address,uint256)",
+    "skim(address)",                 # Uniswap-style
+    "inCaseTokensGetStuck(address)", # Yearn
+    "emergencyWithdraw(address)",
+    "emergencyWithdrawToken(address)",
+    "reclaim(address)",
+    "reclaim(address,uint256)",
+    "reclaimToken(address)",
+    "withdraw(address,uint256)",     # generic but address arg → token rescue
+    "withdrawAll(address)",           # token-targeted
+    # Smart-wallet / multisig escape hatches
+    "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
+    "execute(address,uint256,bytes)",
+    "executeBatch(address[],uint256[],bytes[])",
 ]
 RESCUE_SELECTORS = [Web3.keccak(text=s)[:4] for s in RESCUE_SIGS]
+RESCUE_SEL_SET = set(RESCUE_SELECTORS)
 
 # Bytecode size below which we assume the contract is a proxy (minimal /
-# Safe / OZ transparent / 4337 — all ≤ ~250 bytes). Selectors live in
-# the impl, not the proxy, so a bytecode scan is meaningless here.
+# Safe / OZ transparent / 4337 — typically ≤ ~250 bytes for proxy logic).
 PROXY_BYTECODE_BYTES = 250
+
+# Proxy-impl-getter selectors. Presence in bytecode indicates a proxy that
+# delegates to a separately-deployed impl, so the bytecode scan can't see
+# rescue functions that live in that impl.
+PROXY_MARKER_SIGS = [
+    "implementation()",     # EIP-1967 / OZ Transparent / UUPS  (0x5c60da1b)
+    "getImplementation()",  # variant
+    "proxiableUUID()",      # EIP-1822 UUPS
+    "masterCopy()",         # Gnosis Safe pre-1.3
+    "getMasterCopy()",
+]
+PROXY_MARKER_SET = {Web3.keccak(text=s)[:4] for s in PROXY_MARKER_SIGS}
 
 
 def is_proxy_likely(bytecode_hex: str) -> bool:
     if not bytecode_hex or bytecode_hex == "0x":
         return False
-    return (len(bytecode_hex) - 2) // 2 < PROXY_BYTECODE_BYTES
+    size = (len(bytecode_hex) - 2) // 2
+    if size < PROXY_BYTECODE_BYTES:
+        return True
+    selectors = all_push4_selectors(bytecode_hex)
+    # 0 PUSH4 selectors = fallback-only contract (proxy or constant-data
+    # contract). Either way, scanning its own bytecode for rescue is
+    # meaningless — assume it might delegate.
+    if not selectors:
+        return True
+    return bool(selectors & PROXY_MARKER_SET)
+
+
+def all_push4_selectors(bytecode_hex: str) -> set[bytes]:
+    """Return every 4-byte sequence that appears as a PUSH4 immediate.
+
+    Each Solidity / Vyper function-selector dispatch uses `0x63 SS SS SS SS`
+    (PUSH4 + selector). We track PC and respect PUSH1..PUSH32 immediate
+    sizes so we don't pick up bytes from inside other PUSHN immediates,
+    string literals, or jump tables.
+    """
+    if not bytecode_hex or bytecode_hex == "0x":
+        return set()
+    code = bytes.fromhex(bytecode_hex[2:])
+    out: set[bytes] = set()
+    i = 0
+    n = len(code)
+    while i < n:
+        op = code[i]
+        if 0x60 <= op <= 0x7f:  # PUSH1..PUSH32
+            push_len = op - 0x5f  # PUSH1 = 0x60 → 1
+            if op == 0x63 and i + 5 <= n:  # PUSH4
+                out.add(code[i + 1:i + 5])
+            i += 1 + push_len
+        else:
+            i += 1
+    return out
 
 
 def has_rescue(bytecode_hex: str) -> bool:
-    """Look for `PUSH4 <selector>` (0x63 + 4 bytes) of any rescue selector.
-
-    Solidity dispatchers always reference function selectors via PUSH4, so
-    the prefix prevents false positives from selectors appearing in
-    arbitrary immediates.
-
-    NB: returns False for proxy contracts (their bytecode just delegates;
-    selectors live in the implementation). Use is_proxy_likely() to gate.
-    """
-    if not bytecode_hex or bytecode_hex == "0x":
-        return False
-    code = bytes.fromhex(bytecode_hex[2:])
-    for sel in RESCUE_SELECTORS:
-        if b"\x63" + sel in code:
-            return True
-    return False
+    """True if any known rescue selector appears as a PUSH4 immediate."""
+    return bool(all_push4_selectors(bytecode_hex) & RESCUE_SEL_SET)
 
 GETCODE_BATCH = 100      # JSON-RPC eth_getCode batch
 CONTRACTS_PER_MC = 50    # contracts per Multicall3 (each contributes 3 sub-calls)
@@ -264,22 +330,6 @@ def main() -> None:
     )
     print(rescue_summary)
 
-    print("\n⚠ Stuck-prone contracts (Other, no rescue, AND not a proxy):")
-    print("  Excludes proxies because their selectors live in the impl, "
-          "which we haven't followed — could be smart-wallet-class.")
-    stuck = (
-        out.filter(
-            (pl.col("addr_type") == "Other")
-            & ~pl.col("has_rescue")
-            & ~pl.col("is_proxy_likely")
-        )
-        .group_by("user")
-        .agg(pl.col("avg_pos").sum().alias("Σ avg_pos (mixed asset units)"))
-        .sort("Σ avg_pos (mixed asset units)", descending=True)
-    )
-    print(f"  {len(stuck)} addresses, top 10 by Σ avg_pos:")
-    print(stuck.head(10))
-
     print("\n  Other contracts that ARE proxies (impl unknown — could be wallets):")
     proxies = (
         out.filter((pl.col("addr_type") == "Other") & pl.col("is_proxy_likely"))
@@ -301,6 +351,49 @@ def main() -> None:
         .sort("rows", descending=True)
     )
     print(row_summary)
+
+    pl.Config.set_fmt_str_lengths(50)
+    pl.Config.set_tbl_rows(100)
+    pl.Config.set_float_precision(8)
+
+    # Anything below this avg_pos is essentially "received and forwarded
+    # immediately" — not really holding tokens, so not stuck-prone in any
+    # actionable sense.
+    DUST_THRESHOLD = 0.001
+
+    stuck_users = (
+        out.filter(
+            (pl.col("addr_type") == "Other")
+            & ~pl.col("has_rescue")
+            & ~pl.col("is_proxy_likely")
+        )
+        .group_by("user")
+        .agg(pl.col("avg_pos").sum().alias("Σ avg_pos"))
+        .filter(pl.col("Σ avg_pos") >= DUST_THRESHOLD)
+        .sort("Σ avg_pos", descending=True)
+    )
+
+    # Dump every PUSH4 selector found in each stuck-prone contract — useful
+    # when iterating on RESCUE_SIGS (spot rescue-like selectors we missed).
+    print("\n--- PUSH4 selectors per stuck-prone contract (to extend RESCUE_SIGS) ---")
+    for row in stuck_users.iter_rows(named=True):
+        addr = row["user"]
+        addr_cs = Web3.to_checksum_address(addr)
+        sels = all_push4_selectors(code[addr_cs])
+        sel_hex = sorted("0x" + s.hex() for s in sels)
+        print(f"\n  {addr}  ({len(sel_hex)} selectors, Σ avg_pos={row['Σ avg_pos']:.8f}):")
+        for i in range(0, len(sel_hex), 6):
+            print("    " + "  ".join(sel_hex[i:i + 6]))
+
+    # The headline result — print very last so it's right at the bottom.
+    print("\n" + "=" * 80)
+    print("⚠ STUCK-PRONE CONTRACTS — addr_type=Other, no rescue, not a proxy")
+    print("  (selectors live in this contract's own bytecode; none matches a")
+    print("   known rescue function, so accidentally-sent tokens are stuck)")
+    print(f"  filtered to Σ avg_pos ≥ {DUST_THRESHOLD} mixed asset units")
+    print("=" * 80)
+    print(f"\n{len(stuck_users)} addresses (sorted by Σ avg_pos in mixed asset units):")
+    print(stuck_users)
 
 
 if __name__ == "__main__":
