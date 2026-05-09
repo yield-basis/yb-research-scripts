@@ -37,7 +37,7 @@ from tqdm import tqdm
 from web3 import Web3
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from yb import all_markets, market_deploy_block, w3  # noqa: E402
+from yb import all_markets, fee_receiver, market_deploy_block, rpc_url, w3  # noqa: E402
 
 load_dotenv()
 
@@ -169,7 +169,7 @@ def fetch_logs_chunked(client, address, topics, start_block, end_block, label):
         ("0x" + t.hex() if isinstance(t, bytes) else t) for t in topics
     ]
     addr = Web3.to_checksum_address(address)
-    rpc_url = os.environ["ETH_RPC_URL"]
+    url = rpc_url()
     sess = requests.Session()
 
     def _payload(req_id, from_b, to_b):
@@ -199,7 +199,7 @@ def fetch_logs_chunked(client, address, topics, start_block, end_block, label):
         batch = chunks[batch_start:batch_start + BATCH_SIZE]
         payload = [_payload(j, fb, tb) for j, (fb, tb) in enumerate(batch)]
         resp = _retry(
-            lambda payload=payload: sess.post(rpc_url, json=payload, timeout=180),
+            lambda payload=payload: sess.post(url, json=payload, timeout=180),
             label=f"getLogs {batch[0][0]}..{batch[-1][1]}")
         resp.raise_for_status()
         results = resp.json()
@@ -297,10 +297,13 @@ def main() -> None:
         _log(f"Saved events to {events_path}")
 
     # Per-market user_deltas / user_yb. Excluded addresses (NOT real users):
-    #   - 0x0           mint/burn pseudo-address
-    #   - staker        gauge contract holds LT on behalf of stakers
-    #   - lt            defensive: LT contract itself, in case anything
-    #                   ever ends up holding its own token
+    #   - 0x0             mint/burn pseudo-address
+    #   - staker          gauge contract holds LT on behalf of stakers
+    #   - lt              defensive: LT contract itself
+    #   - fee_receiver    FeeDistributor — protocol contract that holds LT
+    #                     pending distribution to veYB holders
+    fee_dist = fee_receiver().lower()
+    print(f"\nExcluding fee_receiver (FeeDistributor) = {fee_dist}\n")
     market_user_deltas: dict[int, dict[str, list]] = {}
     market_user_yb: dict[int, dict[str, list]] = {}
     for idx, c in ctx_by_idx.items():
@@ -308,6 +311,7 @@ def main() -> None:
             ZERO_ADDR,
             c["market"].staker.lower(),
             c["market"].lt.lower(),
+            fee_dist,
         }
         user_deltas: dict[str, list] = defaultdict(list)
         n_skipped = 0
@@ -400,7 +404,7 @@ def main() -> None:
     # block_identifier varies. Then send N eth_calls per HTTP POST as a
     # JSON-RPC batch.
     agg_calldata = mc3.functions.aggregate3(base_calls)._encode_transaction_data()
-    rpc_url = os.environ["ETH_RPC_URL"]
+    url = rpc_url()
     sess = requests.Session()
 
     def _decode_agg3_return(hex_str: str) -> list[tuple[bool, bytes]]:
@@ -417,7 +421,7 @@ def main() -> None:
             for j, b in enumerate(batch_blocks)
         ]
         response = _retry(
-            lambda payload=payload: sess.post(rpc_url, json=payload, timeout=120),
+            lambda payload=payload: sess.post(url, json=payload, timeout=120),
             label=f"batch@{batch_blocks[0]}..{batch_blocks[-1]}")
         response.raise_for_status()
         results = response.json()

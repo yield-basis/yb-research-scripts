@@ -54,6 +54,13 @@ FACTORY_ABI = [
         ],
     },
     {
+        "name": "fee_receiver",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"type": "address"}],
+    },
+    {
         "name": "MarketParameters",
         "type": "event",
         "anonymous": False,
@@ -86,10 +93,27 @@ class Market:
 
 @cache
 def w3() -> Web3:
-    rpc = os.environ["ETH_RPC_URL"]
-    client = Web3(Web3.HTTPProvider(rpc))
-    assert client.is_connected(), f"RPC not reachable: {rpc}"
-    return client
+    """Web3 client, tries ETH_RPC_URL then falls back to ETH_RPC_URL_FALLBACK."""
+    primary = os.environ["ETH_RPC_URL"]
+    fallback = os.environ.get("ETH_RPC_URL_FALLBACK")
+    client = Web3(Web3.HTTPProvider(primary))
+    if client.is_connected():
+        return client
+    if fallback:
+        print(f"⚠ primary RPC unreachable ({primary}); using fallback")
+        client = Web3(Web3.HTTPProvider(fallback))
+        if client.is_connected():
+            return client
+    raise RuntimeError(
+        f"No reachable RPC: tried {primary}"
+        + (f" and {fallback}" if fallback else "")
+    )
+
+
+@cache
+def rpc_url() -> str:
+    """Return the URL of the currently-active provider (primary or fallback)."""
+    return w3().provider.endpoint_uri  # type: ignore[attr-defined]
 
 
 @cache
@@ -116,6 +140,12 @@ def get_market(i: int) -> Market:
 
 def all_markets() -> list[Market]:
     return [get_market(i) for i in range(market_count())]
+
+
+@cache
+def fee_receiver() -> str:
+    """Address that receives YB protocol fees (FeeDistributor)."""
+    return factory().functions.fee_receiver().call()
 
 
 @cache
