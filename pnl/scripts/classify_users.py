@@ -40,6 +40,8 @@ MULTICALL3 = Web3.to_checksum_address("0xcA11bde05977b3631167028862bE2a173976CA1
 SEL_GETTHRESHOLD = Web3.keccak(text="getThreshold()")[:4]
 SEL_VERSION = Web3.keccak(text="VERSION()")[:4]
 SEL_REQUIRED_CRVUSD = Web3.keccak(text="required_crvusd()")[:4]
+SEL_COINS_0 = Web3.keccak(text="coins(uint256)")[:4]      # Curve
+SEL_TOKEN0 = Web3.keccak(text="token0()")[:4]              # Uniswap V2/V3
 SEL_AGGREGATE3 = Web3.keccak(text="aggregate3((address,bool,bytes)[])")[:4]
 
 # Common selectors that let an admin pull arbitrary ERC20 tokens out of a
@@ -252,6 +254,10 @@ def main() -> None:
     classification: dict[str, str] = {a: "EOA" for a in eoas}
 
     pbar = tqdm(total=len(contracts), desc="probe contracts", unit="addr")
+    # 5 sub-calls per contract: getThreshold, VERSION, required_crvusd,
+    # coins(0), token0().
+    SUBCALLS = 5
+    coins0_calldata = SEL_COINS_0 + b"\x00" * 32
     for i in range(0, len(contracts), CONTRACTS_PER_MC):
         cset = contracts[i:i + CONTRACTS_PER_MC]
         calls = []
@@ -259,6 +265,8 @@ def main() -> None:
             calls.append((c, True, SEL_GETTHRESHOLD))
             calls.append((c, True, SEL_VERSION))
             calls.append((c, True, SEL_REQUIRED_CRVUSD))
+            calls.append((c, True, coins0_calldata))
+            calls.append((c, True, SEL_TOKEN0))
         cd = aggregate3_calldata(calls)
         payload = {"jsonrpc": "2.0", "id": 1, "method": "eth_call",
                    "params": [{"to": MULTICALL3, "data": cd}, hex(block)]}
@@ -272,13 +280,20 @@ def main() -> None:
         decoded = abi_decode(["(bool,bytes)[]"], ret_bytes)[0]
 
         for j, c in enumerate(cset):
-            t_ok, _ = decoded[j * 3 + 0]
-            v_ok, _ = decoded[j * 3 + 1]
-            r_ok, _ = decoded[j * 3 + 2]
+            base = j * SUBCALLS
+            t_ok, _ = decoded[base + 0]
+            v_ok, _ = decoded[base + 1]
+            r_ok, _ = decoded[base + 2]
+            coins_ok, _ = decoded[base + 3]
+            tok0_ok, _ = decoded[base + 4]
             if r_ok:
                 classification[c] = "HybridVault"
             elif t_ok and v_ok:
                 classification[c] = "Safe"
+            elif coins_ok or tok0_ok:
+                # Has coins(0) or token0() → DEX liquidity pool. Holdings are
+                # by-design inventory backing LP tokens, not stuck.
+                classification[c] = "Pool"
             else:
                 classification[c] = "Other"
         pbar.update(len(cset))
@@ -292,11 +307,10 @@ def main() -> None:
         proxy_map[a] = is_proxy_likely(c)
         if c == "0x":
             rescue_map[a] = False  # EOA — N/A
-        elif classification[a] in ("Safe", "HybridVault"):
-            # Both are proxy-deployed (Safe → singleton with execTransaction;
-            # YB HybridVault → impl with recover_tokens(IERC20)). Hardcode
-            # rescue=True since we already verified the type via interface
-            # probe (getThreshold/VERSION or required_crvusd).
+        elif classification[a] in ("Safe", "HybridVault", "Pool"):
+            # Safe / HybridVault: proxy-deployed with rescue in impl.
+            # Pool: holds LT/tokens by design as LP inventory; LP holders
+            # have a claim via remove_liquidity / NFT redemption.
             rescue_map[a] = True
         else:
             rescue_map[a] = has_rescue(c)
