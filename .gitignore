@@ -1,0 +1,20 @@
+# Brownie compilation output
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+
+# Editor/IDE
+.idea/
+.vscode/
+.claude/
+
+# OS
+.DS_Store
+
+# Local env
+.env
