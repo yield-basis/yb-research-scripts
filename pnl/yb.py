@@ -25,6 +25,11 @@ load_dotenv()
 
 FACTORY_ENS = "factory.yieldbasis.eth"
 
+# YB token TGE / first airdrop on Ethereum mainnet — first batch distribution
+# tx (0xab8629e7…) inside the ~4-hour Multisend window of 2025-10-15.
+# Block timestamp: 2025-10-15 09:42:23 UTC (Unix 1760521343).
+AIRDROP_1_BLOCK = 23582267
+
 FACTORY_ABI = [
     {
         "name": "market_count",
