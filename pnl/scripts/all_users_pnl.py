@@ -13,9 +13,16 @@ at each unique event block — all markets in a SINGLE Multicall3 per block:
   shared:
     - YB_POOL.price_oracle()             (YB price in crvUSD)
 
+Then queries Gauge.preview_claim(YB, user) at end_block for every
+(market, user) pair via Multicall3 — this is the YB that has accrued
+to the user but not yet been transferred. It's added to the YB revenue
+side of the PnL (valued at end_block YB price), so users that staked
+but never claimed aren't penalised.
+
 Each row in the CSV is one (market, user) and reports both PnL views
 (redemption-based via preview_withdraw, NAV-based via pricePerShare),
-YB rewards valued at receipt blocks, and position-size summaries.
+YB rewards (received transfers + pending claimable) valued in BTC, and
+position-size summaries.
 
 Usage:
     uv run python scripts/all_users_pnl.py MARKET_IDX [MARKET_IDX ...] [--out FILE]
@@ -77,6 +84,10 @@ LT_ABI = [
 GAUGE_ABI = [
     {"name": "convertToAssets", "type": "function", "stateMutability": "view",
      "inputs": [{"type": "uint256"}], "outputs": [{"type": "uint256"}]},
+    {"name": "preview_claim", "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "reward", "type": "address"},
+                {"name": "user", "type": "address"}],
+     "outputs": [{"type": "uint256"}]},
 ]
 ERC20_ABI = [
     {"name": "decimals", "type": "function", "stateMutability": "view",
@@ -280,7 +291,7 @@ def main() -> None:
               f"deploy_block={c['start_block']}")
     print(f"end_block: {end_block}\n")
 
-    _stage("Stage 1/3: fetching event logs")
+    _stage("Stage 1/4: fetching event logs")
     events_path = os.path.join(
         CACHE_DIR, f"events_{'_'.join(map(str, market_indices))}_to_{end_block}.pkl")
     market_events = _load_pickle(events_path)
@@ -404,7 +415,7 @@ def main() -> None:
     yb_offset = len(base_calls)
     base_calls.append((YB_POOL, True, pool_cd))  # YB price (shared)
 
-    _stage("Stage 2/3: sampling PPS at every event block (Multicall3)")
+    _stage("Stage 2/4: sampling PPS at every event block (Multicall3)")
     pps_path = os.path.join(
         CACHE_DIR, f"pps_{'_'.join(map(str, market_indices))}_to_{end_block}.pkl")
     cache: dict[int, dict] = _load_pickle(pps_path) or {}
@@ -466,7 +477,85 @@ def main() -> None:
     pbar.close()
     _save_pickle(pps_path, cache)
 
-    _stage("Stage 3/3: computing per-user PnL")
+    _stage("Stage 3/4: pending YB rewards at end_block (Multicall3)")
+    pending_path = os.path.join(
+        CACHE_DIR,
+        f"pending_yb_{'_'.join(map(str, market_indices))}_to_{end_block}.pkl")
+    pending_yb: dict[int, dict[str, int]] = _load_pickle(pending_path) or {}
+    if pending_yb:
+        _log(f"Loaded cached pending-YB snapshot from {pending_path}")
+
+    # Per-market preview_claim selector — function ABI is identical across
+    # gauges, so we encode (YB_TOKEN, user) once per call but reuse the
+    # contract's encode_transaction_data path for safety.
+    sample_gauge_full = client.eth.contract(
+        address=ctx_by_idx[market_indices[0]]["gauge_addr"], abi=GAUGE_ABI)
+
+    need_pending: list[tuple[int, str]] = []
+    for idx in market_indices:
+        pending_yb.setdefault(idx, {})
+        for user in market_user_deltas[idx]:
+            if user not in pending_yb[idx]:
+                need_pending.append((idx, user))
+
+    if need_pending:
+        # Each preview_claim runs an internal _checkpoint, so it's heavier
+        # than the simple view calls in stage 2. Cap subcalls per multicall
+        # at 50 to keep gas per eth_call modest.
+        SUBCALLS_PER_MC = 50
+        chunks = [need_pending[i:i + SUBCALLS_PER_MC]
+                  for i in range(0, len(need_pending), SUBCALLS_PER_MC)]
+        _log(f"Querying preview_claim(YB, user) for {len(need_pending)} "
+             f"(gauge,user) pairs in {len(chunks)} multicall(s)")
+
+        pbar = tqdm(total=len(need_pending), desc="pending YB", unit="user")
+        for batch_start in range(0, len(chunks), BATCH_SIZE):
+            batch_chunks = chunks[batch_start:batch_start + BATCH_SIZE]
+            payloads = []
+            for j, chunk in enumerate(batch_chunks):
+                calls = []
+                for idx, user in chunk:
+                    cd = sample_gauge_full.functions.preview_claim(
+                        YB_TOKEN, Web3.to_checksum_address(user)
+                    )._encode_transaction_data()
+                    calls.append((ctx_by_idx[idx]["gauge_addr"], True, cd))
+                agg_cd = mc3.functions.aggregate3(calls)._encode_transaction_data()
+                payloads.append({
+                    "jsonrpc": "2.0", "id": j, "method": "eth_call",
+                    "params": [{"to": MULTICALL3, "data": agg_cd}, hex(end_block)],
+                })
+            response = _retry(
+                lambda payloads=payloads: sess.post(url, json=payloads, timeout=180),
+                label=f"pending-yb batch {batch_start}/{len(chunks)}")
+            response.raise_for_status()
+            results = response.json()
+            if not isinstance(results, list):
+                raise RuntimeError(f"non-list pending-yb response: {results}")
+            by_id = {r["id"]: r for r in results}
+            for j, chunk in enumerate(batch_chunks):
+                r = by_id[j]
+                if "result" not in r:
+                    raise RuntimeError(
+                        f"pending-yb eth_call error: {r.get('error')}")
+                decoded = _decode_agg3_return(r["result"])
+                for k, (idx, user) in enumerate(chunk):
+                    amt = (int.from_bytes(decoded[k][1], "big")
+                           if decoded[k][0] else 0)
+                    pending_yb[idx][user] = amt
+                pbar.update(len(chunk))
+        pbar.close()
+        _save_pickle(pending_path, pending_yb)
+        _log(f"Saved pending-YB snapshot to {pending_path}")
+    else:
+        _log("No pending-YB queries needed (all users cached)")
+
+    for idx in market_indices:
+        nz = sum(1 for v in pending_yb[idx].values() if v > 0)
+        tot = sum(pending_yb[idx].values()) / 1e18
+        _log(f"  M{idx}: {nz}/{len(pending_yb[idx])} users have pending YB, "
+             f"total = {tot:.4f} YB")
+
+    _stage("Stage 4/4: computing per-user PnL")
     rows = []
     for idx, c in ctx_by_idx.items():
         sym = c["sym"]
@@ -531,17 +620,30 @@ def main() -> None:
             max_pos = max(positions_redem)
             avg_pos = weighted_pos / active_blocks if active_blocks else 0
 
-            yb_total_atomic = 0
-            yb_crvusd_atomic = 0.0
-            yb_btc_atomic = 0.0
+            yb_recv_atomic = 0
+            yb_recv_crvusd_atomic = 0.0
+            yb_recv_btc_atomic = 0.0
             for b, amount in user_yb.get(user, []):
                 cm = cache[b][idx]
                 yb_price = cache[b]["yb"]
                 crvusd = amount * yb_price / 10**18
                 btc = crvusd * btc_scale / cm["btc"] if cm["btc"] > 0 else 0
-                yb_total_atomic += amount
-                yb_crvusd_atomic += crvusd
-                yb_btc_atomic += btc
+                yb_recv_atomic += amount
+                yb_recv_crvusd_atomic += crvusd
+                yb_recv_btc_atomic += btc
+
+            # Pending (claimable, not yet transferred) YB at end_block,
+            # valued at the end_block YB price.
+            yb_pend_atomic = pending_yb.get(idx, {}).get(user, 0)
+            cm_end = cache[end_block][idx]
+            yb_price_end = cache[end_block]["yb"]
+            yb_pend_crvusd = yb_pend_atomic * yb_price_end / 10**18
+            yb_pend_btc = (yb_pend_crvusd * btc_scale / cm_end["btc"]
+                           if cm_end["btc"] > 0 else 0)
+
+            yb_total_atomic = yb_recv_atomic + yb_pend_atomic
+            yb_crvusd_atomic = yb_recv_crvusd_atomic + yb_pend_crvusd
+            yb_btc_atomic = yb_recv_btc_atomic + yb_pend_btc
 
             pnl_lt_redem_btc = pnl_lt_redem / btc_scale
             pnl_g_redem_btc = pnl_g_redem / btc_scale
@@ -559,7 +661,9 @@ def main() -> None:
                 "pnl_gauge_redem": pnl_g_redem_btc,
                 "pnl_lt_pps": pnl_lt_pps_btc,
                 "pnl_gauge_pps": pnl_g_pps_btc,
-                "yb_received": yb_total_atomic / 1e18,
+                "yb_received": yb_recv_atomic / 1e18,
+                "yb_pending": yb_pend_atomic / 1e18,
+                "yb_earned": yb_total_atomic / 1e18,
                 "yb_value_crvusd": yb_crvusd_atomic / 1e18,
                 "yb_value_in_asset": yb_btc,
                 "net_pnl_redem": pnl_lt_redem_btc + pnl_g_redem_btc + yb_btc,
@@ -577,6 +681,8 @@ def main() -> None:
                      pl.col("max_pos").sum().alias("Σ max_pos"),
                      pl.col("net_pnl_redem").sum().alias("Σ net_pnl_redem"),
                      pl.col("net_pnl_pps").sum().alias("Σ net_pnl_pps"),
+                     pl.col("yb_received").sum().alias("Σ yb_recv"),
+                     pl.col("yb_pending").sum().alias("Σ yb_pend"),
                      pl.col("yb_value_in_asset").sum().alias("Σ yb_in_asset"),
                  ])
                  .sort("market"))
