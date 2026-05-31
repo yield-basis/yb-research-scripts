@@ -142,6 +142,7 @@ name = "chainlink-experiment"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "eth-abi" },
     { name = "eth-utils" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -153,6 +154,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "eth-abi", specifier = ">=5.0.0" },
     { name = "eth-utils", specifier = ">=5.0.0" },
     { name = "matplotlib", specifier = ">=3.10" },
     { name = "numpy", specifier = ">=2.0" },
