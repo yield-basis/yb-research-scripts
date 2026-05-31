@@ -42,21 +42,33 @@ from plot_chainlink_vs_price import (
 # this many seconds. Configurable here (override at runtime with --tau).
 EMA_TAU_SECONDS = 866.0
 
+# Chainlink feed precision (deviation threshold) for BTC/USD: 0.5%. The on-chain
+# answer is only guaranteed accurate to within this band, so the model trusts
+# the EMA inside the band and de-biases the Chainlink price by the band edge
+# outside it.
+CHAINLINK_PRECISION = 0.005
+
 
 def model_price(ema_binance: np.ndarray, chainlink: np.ndarray) -> np.ndarray:
-    """Aggregate the EMA of Binance spot and the current Chainlink price into a
-    single model price.
+    """Aggregate the EMA of Binance spot and the current Chainlink price.
 
-    >>> REPLACE THIS with the real model once defined. <<<
+    Per timestamp, with p = CHAINLINK_PRECISION:
+        chainlink > (1+p)*ema  ->  chainlink / (1+p)
+        chainlink < (1-p)*ema  ->  chainlink / (1-p)
+        otherwise              ->  ema
+    i.e. clamp the Chainlink price back to the edge of its 0.5% precision band
+    around the EMA, and fall back to the EMA when Chainlink is within the band.
 
-    Inputs are numpy arrays (or scalars), aligned elementwise on the candle
-    grid; the return must be the same shape. Placeholder below just passes the
-    Chainlink price through (model == oracle), so the plot is meaningful before
-    the real model exists. Examples of what could go here:
-        return 0.5 * (ema_binance + chainlink)          # simple blend
-        return chainlink * (ema_binance / chainlink)**k  # pull toward EMA
-    """
-    return np.asarray(chainlink, dtype=np.float64)
+    Vectorized over the candle grid (inputs/output are same-shape arrays); also
+    works on scalars."""
+    p = CHAINLINK_PRECISION
+    ema = np.asarray(ema_binance, dtype=np.float64)
+    cl = np.asarray(chainlink, dtype=np.float64)
+    return np.select(
+        [cl > (1 + p) * ema, cl < (1 - p) * ema],
+        [cl / (1 + p), cl / (1 - p)],
+        default=ema,
+    )
 
 
 def ema_time_constant(x: np.ndarray, dt: float, tau: float) -> np.ndarray:
@@ -135,6 +147,8 @@ def main() -> int:
 
     (line_real,) = ax.plot([], [], lw=1.2, color="steelblue", alpha=0.9,
                            label="Binance 1m close (real)")
+    (line_cl,) = ax.plot([], [], lw=1.2, color="gray", alpha=0.8,
+                         label="Chainlink price (on grid)")
     (line_ema,) = ax.plot([], [], lw=1.2, color="red",
                           label=f"EMA(tau={args.tau:g}s) of Binance")
     (line_model,) = ax.plot([], [], lw=1.2, color="black", zorder=4,
@@ -152,7 +166,8 @@ def main() -> int:
     # Reuse LazyPlot: "real" slot = Binance spot; EMA and model ride along as
     # extra dense series (all share the candle x-grid).
     lazy = LazyPlot(ax, xc, close, line_real, xo=None,
-                    extra=[(ema_b, line_ema), (model, line_model)])
+                    extra=[(cl_grid, line_cl), (ema_b, line_ema),
+                           (model, line_model)])
     ax.callbacks.connect("xlim_changed", lazy.redraw)
     fig.canvas.mpl_connect("resize_event", lazy.redraw)
 
