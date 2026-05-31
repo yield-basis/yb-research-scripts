@@ -123,7 +123,7 @@ class LazyPlot:
     """Re-decimates the dense series to the current viewport on every nav event."""
 
     def __init__(self, ax, xc, close, line_real, ema_arr=None, line_ema=None,
-                 xo=None):
+                 xo=None, extra=None):
         self.ax = ax
         self.xc = xc            # candle x (date nums), sorted
         self.close = close
@@ -132,6 +132,8 @@ class LazyPlot:
         self.line_ema = line_ema
         self.xo = xo            # oracle x (for y-rescale to viewport)
         self.yo = None
+        # extra dense series sharing xc: list of (array, Line2D) decimated too.
+        self.extra = list(extra) if extra else []
         self._busy = False
 
     def redraw(self, *_):
@@ -165,6 +167,13 @@ class LazyPlot:
                 self.line_ema.set_data(exd, eyd)
                 if ev.size:
                     ylo, yhi = min(ylo, ev.min()), max(yhi, ev.max())
+
+            for arr, line in self.extra:
+                av = arr[i0:i1]
+                axd, ayd = minmax_decimate(xv, av, n_px)
+                line.set_data(axd, ayd)
+                if av.size:
+                    ylo, yhi = min(ylo, av.min()), max(yhi, av.max())
 
             # include visible oracle in the y-rescale
             if self.xo is not None and self.yo is not None:
@@ -227,15 +236,15 @@ def main() -> int:
     ax.set_autoscaley_on(False)
 
     # Dense real price: thin line, viewport-decimated.
-    (line_real,) = ax.plot([], [], lw=0.6, color="steelblue", alpha=0.9,
+    (line_real,) = ax.plot([], [], lw=1.2, color="steelblue", alpha=0.9,
                            label="BTC/USDT 1m close (real)")
     line_ema = None
     if ema_arr is not None:
-        (line_ema,) = ax.plot([], [], lw=1.0, color="seagreen",
+        (line_ema,) = ax.plot([], [], lw=2.0, color="seagreen",
                               label=f"EMA({args.ema}m) of real")
 
     # Oracle: full, on-chain step (hold then jump).
-    ax.step(xo, px_o, where="post", lw=1.0, color="crimson",
+    ax.step(xo, px_o, where="post", lw=1.2, color="crimson",
             label="Chainlink BTC/USD (on-chain, step)", zorder=3)
 
     ax.set_xlim(xc[0], xc[-1])
