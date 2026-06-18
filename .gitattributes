@@ -4,3 +4,4 @@ parallel_fetch_plots/data/*/*.csv filter=lfs diff=lfs merge=lfs -text
 parallel_fetch_plots/abi/* filter=lfs diff=lfs merge=lfs -text
 parallel_fetch_plots/abi/*.json filter=lfs diff=lfs merge=lfs -text
 chainlink/*.xz filter=lfs diff=lfs merge=lfs -text
+rates/*.xz filter=lfs diff=lfs merge=lfs -text

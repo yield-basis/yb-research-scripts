@@ -1,0 +1,17 @@
+[project]
+name = "rates-research"
+version = "0.1.0"
+description = "Analysis of YB borrow rates, incentive rates and related on-chain data"
+requires-python = ">=3.12"
+dependencies = [
+    "web3>=7.16.0",
+    "titanoboa>=0.2.5",
+    "python-dotenv>=1.2.2",
+    "eth-utils>=5.0.0",
+    "eth-abi>=5.0.0",
+    "numpy>=2.0",
+    "polars>=1.40.1",
+    "matplotlib>=3.10",
+    "pyqt6>=6.11.0",
+    "tqdm>=4.67.3",
+]
