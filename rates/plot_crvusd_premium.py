@@ -50,6 +50,13 @@ def read_xz(p: Path) -> pl.DataFrame:
         return pl.read_csv(f.read())
 
 
+def parse_date(s: str) -> int:
+    d = dt.datetime.fromisoformat(s)
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.UTC)
+    return int(d.timestamp())
+
+
 def trailing_apr(ts: np.ndarray, pps: np.ndarray, win_days: float) -> np.ndarray:
     """Annualized pps growth over a trailing window of win_days (percent)."""
     w = win_days * 86400
@@ -70,6 +77,9 @@ def main() -> int:
     ap.add_argument("--aave", type=Path, default=AAVE_IN)
     ap.add_argument("--win", type=float, default=14.0,
                     help="trailing window (days) for scrvUSD APR (default 14)")
+    ap.add_argument("--bootstrap-end", default="2025-01-01",
+                    help="exclude samples before this date from the median (scrvUSD "
+                         "launch had tiny TVL / erratic APR); default 2025-01-01")
     ap.add_argument("--save", type=Path, default=None)
     args = ap.parse_args()
 
@@ -85,14 +95,18 @@ def main() -> int:
     aave_on_scrv = np.interp(sts, ats, aapr)   # align Aave onto scrvUSD samples
     spread = scrv_apr - aave_on_scrv
 
-    m = ~np.isnan(spread)
+    # Median/mean computed over the post-bootstrap period only (scrvUSD launch
+    # had tiny TVL and erratic APR that would skew the stats).
+    boot_ts = parse_date(args.bootstrap_end)
+    valid = ~np.isnan(spread)
+    m = valid & (sts >= boot_ts)
     med = float(np.median(spread[m]))
     mean = float(np.mean(spread[m]))
     # recent (last 90d) spread for contrast
     recent = m & (sts > sts[-1] - 90 * 86400)
     med_recent = float(np.median(spread[recent]))
     print(f"scrvUSD APR (trailing {args.win:g}d) vs Aave USDC supply, "
-          f"{sd['datetime_utc'][0][:10]} .. {sd['datetime_utc'][-1][:10]}")
+          f"post-bootstrap {args.bootstrap_end} .. {sd['datetime_utc'][-1][:10]}")
     print(f"  spread median {med:+.2f}%  mean {mean:+.2f}%  last-90d median {med_recent:+.2f}%")
 
     times = [dt.datetime.fromtimestamp(t, dt.UTC) for t in sts]
@@ -106,10 +120,18 @@ def main() -> int:
     ax1.grid(True, alpha=0.3)
     ax1.legend(loc="upper right")
 
+    # Shade the excluded bootstrap window on both panels.
+    boot_dt = dt.datetime.fromtimestamp(boot_ts, dt.UTC)
+    for ax in (ax1, ax2):
+        ax.axvspan(times[0], boot_dt, color="0.5", alpha=0.10)
+    ax1.text(times[0], ax1.get_ylim()[1], " bootstrap (excluded)",
+             va="top", ha="left", fontsize=8, color="0.4")
+
     ax2.axhline(0, color="0.6", lw=0.8)
     ax2.plot(times, spread, lw=1.2, color="C3", label="spread (scrvUSD − Aave)")
-    ax2.axhline(med, color="C3", ls="--", lw=1.2, label=f"median {med:+.2f}%")
-    ax2.fill_between(times, spread, med, where=~np.isnan(spread), color="C3", alpha=0.12)
+    ax2.axhline(med, color="C3", ls="--", lw=1.2,
+                label=f"post-bootstrap median {med:+.2f}%")
+    ax2.fill_between(times, spread, med, where=m, color="C3", alpha=0.12)
     ax2.set_ylabel("spread, %")
     ax2.set_xlabel("date (UTC)")
     ax2.grid(True, alpha=0.3)
