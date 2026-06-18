@@ -85,7 +85,6 @@ is interpolated by timestamp onto the same samples; spread = scrvUSD − Aave
 
 | Window | median spread | mean | IQR | scrvUSD > Aave |
 |--------|--------------:|-----:|-----|---------------:|
-| Full life (from 2024-11) | +1.62% | +1.67% | [−1.18, +3.20] | 65% |
 | Ex-bootstrap (from 2025-01) | **+1.25%** | **+1.06%** | [−1.39, +2.91] | 62% |
 | 2025-H2 onward (from 2025-07) | +1.78% | +1.34% | [−1.47, +3.31] | 68% |
 | Last 90 days | +0.20% | — | — | — |
