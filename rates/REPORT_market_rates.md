@@ -1,0 +1,55 @@
+# Typical market rates — LlamaLend / scrvUSD / Aave USDC
+
+Three lending/borrow rates sampled at 1000 time-spaced points over
+2025-10-01 … 2026-06-17 (see `fetch_market_rates.py`), one Multicall3 per block.
+All rates are reported as **APR** (simple, per-year), in %.
+
+## Sources & how each is read
+
+| Series | Source read | Units → APR |
+|--------|-------------|-------------|
+| LlamaLend WBTC borrow | `AMM.rate()` @ `0xE0438Eb3…666ea` (per-second, 1e18) | `rate × 365·86400` |
+| scrvUSD savings | `scrvUSD.convertToAssets(1e18)` @ `0x0655977F…84367` (price-per-share) | derived: `(pps_i/pps_{i-1} − 1)/dt × yr` |
+| Aave v3 USDC supply | `PoolDataProvider.getReserveData(USDC)[5]` @ `0x7B4EB56E…138a3` (ray, 1e27) | `rate / 1e27` (already annual) |
+
+- LlamaLend: the monetary policy `0x07491D…` writes the rate into the AMM;
+  `AMM.rate()` is the realized per-second borrow rate (Controller `0x4e595413…`).
+- scrvUSD has no instantaneous on-chain rate — it's an ERC4626 vault that unlocks
+  profit linearly between harvests, so APR is the local slope of price-per-share.
+  This is spiky at harvest steps; the plot smooths it with a rolling median.
+- Aave expresses `currentLiquidityRate` in ray as an annual APR already.
+
+## Results (APR over the window)
+
+| Series | Median | IQR (25–75%) | Last (Jun 17) |
+|--------|-------:|-------------:|--------------:|
+| LlamaLend WBTC borrow | **3.73%** | 1.15 – 10.82% | 3.34% |
+| scrvUSD savings       | **3.60%** | 1.39 – 6.29%  | 3.36% |
+| Aave v3 USDC supply   | **3.37%** | 2.52 – 3.77%  | 5.95% |
+
+![market rates](pics/market_rates.png)
+
+## Interpretation
+
+- **All three cluster around ~3.4–3.7% median**, but with very different
+  dispersion. Aave USDC supply is the steadiest (tight IQR ~2.5–3.8%), behaving
+  like a utilization-smoothed money-market rate.
+- **LlamaLend WBTC borrow is the most volatile** — its IQR spans 1.2%–10.8% and
+  it spikes far higher (up to ~140% APR intraday) when utilization runs hot. As a
+  soft-liquidation mint market its rate reacts sharply to crvUSD peg / utilization.
+- **scrvUSD sits in between**: a savings rate that tracks crvUSD-system revenue,
+  noisier than Aave but without LlamaLend's borrow-side spikes.
+- Late in the window Aave USDC supply ticks up (last reading ~6%) above the
+  Curve-ecosystem rates.
+
+The y-axis in the plot is clipped to a robust max (98th pct ×1.25) so the
+LlamaLend utilization spikes don't flatten the rest; pass `--ymax`/`--log` to see
+the full range.
+
+## Reproduce
+
+```sh
+uv run python fetch_market_rates.py              # -> market_rates.csv.xz
+uv run python plot_market_rates.py               # interactive
+uv run python plot_market_rates.py --save pics/market_rates.png
+```
