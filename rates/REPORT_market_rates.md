@@ -72,6 +72,38 @@ and spike hard in Feb 2026, while **Aave USDC leads in the quiet months** (Dec,
 Apr, May), staying in a tight ~2–4.7% band throughout. The Feb–Mar LlamaLend
 means are inflated by intraday utilization spikes; a median view is steadier.
 
+## crvUSD risk premium — scrvUSD vs Aave USDC
+
+Hypothesis: deposits flow into scrvUSD until its yield settles toward a market
+rate, and because crvUSD carries extra risk vs USDC, scrvUSD should sit *above*
+the USDC lending rate by a risk premium. To test it, scrvUSD price-per-share is
+fetched over its full life (since 2024-10-31, `fetch_scrvusd.py`) and its
+realized APR is taken over a trailing 14-day pps window (robust to the vault's
+weekly harvest steps). Aave v3 USDC supply APR (the long series, `fetch_aave_usdc.py`)
+is interpolated by timestamp onto the same samples; spread = scrvUSD − Aave
+(`plot_crvusd_premium.py`).
+
+| Window | median spread | mean | IQR | scrvUSD > Aave |
+|--------|--------------:|-----:|-----|---------------:|
+| Full life (from 2024-11) | +1.62% | +1.67% | [−1.18, +3.20] | 65% |
+| Ex-bootstrap (from 2025-01) | **+1.25%** | **+1.06%** | [−1.39, +2.91] | 62% |
+| 2025-H2 onward (from 2025-07) | +1.78% | +1.34% | [−1.47, +3.31] | 68% |
+| Last 90 days | +0.20% | — | — | — |
+
+![crvUSD risk premium](pics/crvusd_premium.png)
+
+**Verdict: ~1% is a fair estimate of the crvUSD risk premium.** Excluding the
+Nov–Dec 2024 bootstrap (tiny TVL, erratic APR up to ~37%), the scrvUSD savings
+rate sits a median **~1.0–1.3%** above Aave USDC supply, with a mean near +1.1%
+and scrvUSD on top ~62% of the time — consistent with depositors demanding a
+risk premium to hold crvUSD over USDC.
+
+Two caveats: (1) it is *not constant* — the spread swings with crvUSD borrow
+demand and is currently compressed to ~+0.2% (last 90 days), occasionally
+negative; (2) mechanistically scrvUSD yield is revenue-constrained
+(crvUSD borrow fees ÷ scrvUSD TVL), so the premium is what the system *happens*
+to pay, not a hard arbitrage peg to USDC + premium.
+
 ## Reproduce
 
 ```sh
@@ -79,4 +111,9 @@ uv run python fetch_market_rates.py              # -> market_rates.csv.xz
 uv run python plot_market_rates.py               # interactive
 uv run python plot_market_rates.py --save pics/market_rates.png
 uv run python plot_market_rates_monthly.py --save pics/market_rates_monthly.png
+
+# crvUSD risk premium (full scrvUSD life vs long Aave series)
+uv run python fetch_scrvusd.py                   # -> scrvusd_pps.csv.xz
+uv run python fetch_aave_usdc.py                 # -> aave_usdc_rates.csv.xz
+uv run python plot_crvusd_premium.py --save pics/crvusd_premium.png
 ```
