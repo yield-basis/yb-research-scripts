@@ -10,6 +10,7 @@ dependencies = [
     "eth-utils>=5.0.0",
     "eth-abi>=5.0.0",
     "numpy>=2.0",
+    "scipy>=1.14",
     "polars>=1.40.1",
     "matplotlib>=3.10",
     "pyqt6>=6.11.0",
