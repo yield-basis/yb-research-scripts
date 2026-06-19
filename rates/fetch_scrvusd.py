@@ -1,17 +1,20 @@
-"""Fetch scrvUSD price-per-share over its full life, via Multicall3.
+"""Fetch scrvUSD price-per-share and share supply over its full life, via Multicall3.
 
 scrvUSD (0x0655977FEb2f289A4aB78af67BAB0d17aAb84367) is an ERC4626 savings vault
-that launched 2024-10-31. There is no instantaneous on-chain rate, so we record
-price-per-share = convertToAssets(1e18) (crvUSD per share, 1e18 fp) at each
-sampled block; the realized APR is derived later from a trailing pps window
-(see plot_crvusd_premium.py), which is robust to the vault's weekly harvest steps.
+that launched 2024-10-31. Per sampled block we record:
+  - price-per-share = convertToAssets(1e18) (crvUSD per share, 1e18 fp); the
+    realized APR is derived later from a trailing pps window (robust to the
+    vault's weekly harvest steps).
+  - share supply = totalSupply() (shares, 1e18 fp). Shares are minted/burned ONLY
+    on deposit/withdraw (not on yield accrual), so d ln(supply)/dt is the clean
+    behavioral deposit-flow signal used by the response-function analysis.
 
 Each sampled block issues ONE eth_call to Multicall3.aggregate3([convertToAssets,
-getCurrentBlockTimestamp]); blocks are batched 100/request via boa's
+totalSupply, getCurrentBlockTimestamp]); blocks are batched 100/request via boa's
 EthereumRPC.fetch_multi, many batches concurrently.
 
 Output (xz-compressed CSV, default scrvusd_pps.csv.xz), one row per block:
-    block_number, timestamp, datetime_utc, scrvusd_pps
+    block_number, timestamp, datetime_utc, scrvusd_pps, scrvusd_supply
 
 Usage
 -----
@@ -56,18 +59,20 @@ def aggregate3_calldata() -> str:
     calls = [
         (SCRVUSD, False,
          selector("convertToAssets(uint256)") + eth_abi.encode(["uint256"], [WAD])),
+        (SCRVUSD, False, selector("totalSupply()")),
         (MC3, False, selector("getCurrentBlockTimestamp()")),
     ]
     payload = eth_abi.encode(["(address,bool,bytes)[]"], [calls])
     return "0x" + (selector("aggregate3((address,bool,bytes)[])") + payload).hex()
 
 
-def decode_aggregate3(result_hex: str) -> tuple[int, int]:
-    """-> (pps_raw, timestamp)."""
+def decode_aggregate3(result_hex: str) -> tuple[int, int, int]:
+    """-> (pps_raw, supply_raw, timestamp)."""
     items = eth_abi.decode(["(bool,bytes)[]"], bytes.fromhex(result_hex[2:]))[0]
     pps = int.from_bytes(items[0][1], "big")
-    ts = int.from_bytes(items[1][1], "big")
-    return pps, ts
+    supply = int.from_bytes(items[1][1], "big")
+    ts = int.from_bytes(items[2][1], "big")
+    return pps, supply, ts
 
 
 def blk_ts(rpc: EthereumRPC, b: int) -> int:
@@ -153,14 +158,16 @@ def main() -> int:
     print(f"fetching with {args.workers} workers x batch {batch} …", flush=True)
     with lzma.open(args.out, "wt", newline="", preset=6) as fh:
         w = csv.writer(fh)
-        w.writerow(["block_number", "timestamp", "datetime_utc", "scrvusd_pps"])
+        w.writerow(["block_number", "timestamp", "datetime_utc",
+                    "scrvusd_pps", "scrvusd_supply"])
         pbar = tqdm(total=len(blocks), unit="blk", unit_scale=True,
                     desc="scrvUSD pps", dynamic_ncols=True)
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             for rows in ex.map(fetch_chunk, chunks):
-                for b, pps, ts in rows:
+                for b, pps, supply, ts in rows:
                     w.writerow([
-                        b, ts, dt.datetime.fromtimestamp(ts, dt.UTC).isoformat(), pps])
+                        b, ts, dt.datetime.fromtimestamp(ts, dt.UTC).isoformat(),
+                        pps, supply])
                 pbar.update(len(rows))
                 if rows:
                     pbar.set_postfix(block=rows[-1][0])
