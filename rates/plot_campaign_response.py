@@ -64,6 +64,12 @@ def main() -> int:
     ap.add_argument("--win", type=float, default=14.0, help="fee-APR window (days)")
     ap.add_argument("--min-amp", type=float, default=0.05,
                     help="min |d ln TVL| over a segment to fit it (default 0.05)")
+    ap.add_argument("--max-tau", type=float, default=40.0,
+                    help="drop fits with tau above this (railed/unrelaxed, default 40)")
+    ap.add_argument("--min-r2", type=float, default=0.6,
+                    help="drop fits below this R^2 (default 0.6)")
+    ap.add_argument("--tau-bound", type=float, default=60.0,
+                    help="upper tau bound for the fit (default 60)")
     ap.add_argument("--save", type=Path, default=None)
     args = ap.parse_args()
 
@@ -121,10 +127,15 @@ def main() -> int:
         try:
             p0 = [yseg[0] - yseg[-1], 5.0, yseg[-1]]
             popt, _ = curve_fit(relax, tseg, yseg, p0=p0,
-                                bounds=([-1e4, 0.5, 0], [1e4, 60, 1e4]), maxfev=20000)
+                                bounds=([-1e4, 0.5, 0], [1e4, args.tau_bound, 1e4]),
+                                maxfev=20000)
             a, tau, b = popt
             resid = yseg - relax(tseg, *popt)
             ss = 1 - np.sum(resid**2) / np.sum((yseg - yseg.mean())**2)
+            # Drop railed (still-rising, tau hits the bound) and poor fits — these
+            # are unrelaxed segments where the exponential degenerates to a line.
+            if tau > args.max_tau or ss < args.min_r2:
+                continue
             fits.append((a_i, b_i, tau, dln, ss, popt))
         except Exception:
             pass

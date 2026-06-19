@@ -60,16 +60,24 @@ this sidesteps the simultaneity):
 
 ![campaign relaxation](pics/campaign_response.png)
 
+Segments whose τ railed against the fit bound (still-rising, exponential
+degenerates to a line) or fit poorly are dropped (`--max-tau`, `--min-r2`),
+leaving 9 well-constrained fits:
+
 | | result |
 |---|---|
-| **Outflow** | **τ ≈ 5 d** (median 5.0 d, 7 segments). The Nov 5 → Jan 31 YB-off decay fits τ = 5.0 d at R² 0.96 — reproduces the 5.9 d drop fit independently on the raw liquidity curve. |
-| **Inflow** | cleanest single ramp (Jan 31 → Feb 5) τ = **8.5 d**, R² 0.96 — consistent with the 11.4 d rise. Median unreliable: weekly campaigns re-kick TVL before it relaxes, so many inflow segments never saturate. |
+| **Outflow** | **τ ≈ 4–5 d** (median 4.1 d, 5 segments). The Nov 5 → Jan 31 YB-off decay fits τ = 5.0 d at R² 0.96 — reproduces the 5.9 d drop fit independently on the raw liquidity curve. |
+| **Inflow** | cleanest single ramp (Jan 31 → Feb 5) τ = **8.5 d**, R² 0.96 — consistent with the 11.4 d rise. The other inflow segments are short, fast top-ups: weekly campaigns re-kick TVL before it relaxes, so the inflow τ is under-determined. |
 
 ## Conclusions
 
-- The **dead-band + relaxation model holds**. Upper band edge ≈ **1.9× ≈ 2×**;
-  time constants **τ_out ≈ 5 d** (well-measured) and **τ_in ≈ 8–11 d** (clean
-  episodes) — matching the original PYUSD-pool liquidity fits.
+- The **dead-band + relaxation model holds**, but the band is **asymmetric**:
+  the inflow edge is ≈ **1.9× ≈ 2×** (the 2× guess holds on top — not higher),
+  while the outflow edge is ≈ **1×**, not 0.5×. LPs tolerate a high rate lazily
+  (don't pile in until ~2×) but won't sit below market at all (leave once APR
+  dips under ~1×). So the dead zone is closer to **[1×, 2×]** than the symmetric
+  [0.5×, 2×]. Time constants **τ_out ≈ 4–5 d** (well-measured) and
+  **τ_in ≈ 8–11 d** (clean episodes) — matching the original PYUSD-pool fits.
 - "Noisy as hell" was a tooling problem: the instantaneous response function is
   wrong for this system; **staked TVL around campaign events** turns it into a few
   clean exponentials.
