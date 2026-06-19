@@ -103,6 +103,28 @@ negative; (2) mechanistically scrvUSD yield is revenue-constrained
 (crvUSD borrow fees ÷ scrvUSD TVL), so the premium is what the system *happens*
 to pay, not a hard arbitrage peg to USDC + premium.
 
+## scrvUSD vs Sky (sUSDS)
+
+Same construction, but against the **Sky Savings Rate** (sUSDS, `ssr()` read
+directly as APR; `fetch_susds.py` / `plot_susds_premium.py`) instead of Aave.
+sUSDS is a governance-set step rate — another stablecoin savings product rather
+than a pure money-market lending rate.
+
+| Window | median spread | mean | IQR | scrvUSD > sUSDS |
+|--------|--------------:|-----:|-----|----------------:|
+| Ex-bootstrap (from 2025-01) | **+0.03%** | −0.05% | [−2.48, +2.00] | 51% |
+| Last 90 days | −0.28% | — | — | — |
+
+![scrvUSD vs sUSDS](pics/susds_premium.png)
+
+**scrvUSD and sUSDS track almost exactly — essentially zero spread** (median
++0.03%, scrvUSD on top ~51% of the time). This is the flip side of the Aave
+result: Sky already prices its savings rate ~1% *above* plain USDC lending
+(sUSDS median 4.40% vs Aave 3.37% over this window), so the ~1% crvUSD premium
+over Aave is roughly the same premium Sky pays over Aave. Read together, scrvUSD,
+sUSDS and "Aave + ~1%" all sit at a similar level — the two stablecoin savings
+products carry a comparable risk/yield premium over a pure money-market rate.
+
 ## Reproduce
 
 ```sh
@@ -115,4 +137,8 @@ uv run python plot_market_rates_monthly.py --save pics/market_rates_monthly.png
 uv run python fetch_scrvusd.py                   # -> scrvusd_pps.csv.xz
 uv run python fetch_aave_usdc.py                 # -> aave_usdc_rates.csv.xz
 uv run python plot_crvusd_premium.py --save pics/crvusd_premium.png
+
+# scrvUSD vs Sky (sUSDS) savings rate
+uv run python fetch_susds.py                     # -> susds_rates.csv.xz
+uv run python plot_susds_premium.py --save pics/susds_premium.png
 ```
