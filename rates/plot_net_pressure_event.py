@@ -5,7 +5,8 @@ The largest net_pressure excursions in the simulated data (>50%) all cluster on
 2024-08-05, the BTC "Black Monday" crash. This script:
 
   * plots p_cex (real CEX price) vs price_scale (pool's internal scale) over the
-    full simulation, plus a zoom on the crash window with net_pressure overlaid;
+    full simulation, plus one zoom panel per parameter set on the crash window
+    (each with its own price + net_pressure axes, so curves don't overlap);
   * prints how long net_pressure stayed above a set of thresholds during the
     event (the persistence that matters for sizing a slow incentive controller).
 
@@ -35,6 +36,7 @@ import numpy as np
 from net_pressure import load_npz_xz, PRICE_KEY
 
 HERE = Path(__file__).resolve().parent
+ROOT = "btc-candidates-yb-opt"
 DEFAULT = ("btc-candidates-yb-opt/"
            "btc_a5_mf120_of163_fg00850937_don0187374_rpf433333/detailed-output.npz.xz")
 # A different parameter set that barely suffered the event (max ~+33%), for contrast.
@@ -44,6 +46,12 @@ COMPARE = ("btc-candidates-yb-opt/"
 ZOOM_LO = dt.datetime(2024, 8, 3, tzinfo=dt.timezone.utc)
 ZOOM_HI = dt.datetime(2024, 8, 8, tzinfo=dt.timezone.utc)
 THRESHOLDS = [0.20, 0.30, 0.40, 0.50]
+
+
+def label_of(path):
+    """Full parameter-set identifier, e.g. 'btc_a5_mf146_..._rpf301010/dust600'."""
+    import os
+    return os.path.relpath(os.path.dirname(path), ROOT)
 
 
 def compute(path):
@@ -88,67 +96,64 @@ def report_event(t, npr, label=""):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("path", nargs="?", default=DEFAULT, help="detailed-output.npz.xz")
-    ap.add_argument("--compare", default=COMPARE,
-                    help="second candidate to overlay for contrast (or '' to skip)")
+    ap.add_argument("paths", nargs="*", default=[DEFAULT, COMPARE],
+                    help="detailed-output.npz.xz files, one zoom panel each "
+                         "(default: worst mf120_of163 + tame mf146_of170/dust600)")
     ap.add_argument("--save", metavar="PNG", help="save figure instead of showing")
     args = ap.parse_args()
 
-    name_main = Path(args.path).parent.name
-    t, price, price_scale, npr = compute(args.path)
-    report_event(t, npr, label=name_main)
+    cands = []  # (label, t, price, price_scale, npr)
+    for p in args.paths:
+        label = label_of(p)
+        t, price, price_scale, npr = compute(p)
+        report_event(t, npr, label=label)
+        cands.append((label, t, price, price_scale, npr))
 
-    cmp_data = None
-    if args.compare:
-        name_cmp = Path(args.compare).parent.name
-        tc, _, _, nprc = compute(args.compare)
-        report_event(tc, nprc, label=name_cmp)
-        cmp_data = (tc.astype("datetime64[s]"), nprc, name_cmp)
-
-    tt = t.astype("datetime64[s]")
-
-    fig, (axTop, axBot) = plt.subplots(2, 1, figsize=(13, 9))
-
-    # --- Top: full-range price tracking (downsampled for speed) ---
-    step = max(1, t.size // 6000)
-    axTop.plot(tt[::step], price[::step], lw=0.7, color="black", label="p_cex (real)")
-    axTop.plot(tt[::step], price_scale[::step], lw=0.7, color="darkorange",
-               alpha=0.8, label="price_scale (pool)")
-    axTop.axvspan(np.datetime64(ZOOM_LO.replace(tzinfo=None)),
-                  np.datetime64(ZOOM_HI.replace(tzinfo=None)),
-                  color="red", alpha=0.08, label="zoom window")
-    axTop.set_title("p_cex vs price_scale — full simulation")
-    axTop.set_ylabel("BTC price [$]")
-    axTop.legend(loc="upper left")
-    axTop.grid(alpha=0.3)
-
-    # --- Bottom: crash-window zoom, price + net_pressure twin axis ---
     lo64 = np.datetime64(ZOOM_LO.replace(tzinfo=None))
     hi64 = np.datetime64(ZOOM_HI.replace(tzinfo=None))
-    m = (tt >= lo64) & (tt < hi64)
-    axBot.plot(tt[m], price[m], lw=0.9, color="black", label="p_cex (real)")
-    axBot.plot(tt[m], price_scale[m], lw=0.9, color="darkorange", alpha=0.85,
-               label="price_scale (pool)")
-    axBot.set_ylabel("BTC price [$]")
-    axBot.set_title(f"Zoom: {ZOOM_LO:%Y-%m-%d} crash — price & net_pressure")
-    axBot.grid(alpha=0.3)
 
-    axNp = axBot.twinx()
-    axNp.plot(tt[m], npr[m] * 100, lw=0.9, color="steelblue", alpha=0.85,
-              label=f"net_pressure ({name_main})")
-    if cmp_data is not None:
-        ttc, nprc, name_cmp = cmp_data
-        mc = (ttc >= lo64) & (ttc < hi64)
-        axNp.plot(ttc[mc], nprc[mc] * 100, lw=0.9, color="seagreen", alpha=0.85,
-                  label=f"net_pressure ({name_cmp})")
-    axNp.axhline(50, color="crimson", ls="--", lw=1.0, label="50%")
-    axNp.set_ylabel("net_pressure [%]", color="steelblue")
-    axNp.tick_params(axis="y", labelcolor="steelblue")
+    nrows = 1 + len(cands)  # full-range panel + one zoom panel per candidate
+    fig, axes = plt.subplots(nrows, 1, figsize=(13, 3.6 * nrows))
+    axTop = axes[0]
 
-    # merge legends
-    h1, l1 = axBot.get_legend_handles_labels()
-    h2, l2 = axNp.get_legend_handles_labels()
-    axBot.legend(h1 + h2, l1 + l2, loc="upper right")
+    # --- Top: full-range price tracking (p_cex is shared; price_scale from cand 0) ---
+    lbl0, t0, price0, ps0, _ = cands[0]
+    tt0 = t0.astype("datetime64[s]")
+    step = max(1, t0.size // 6000)
+    axTop.plot(tt0[::step], price0[::step], lw=0.7, color="black", label="p_cex (real)")
+    axTop.plot(tt0[::step], ps0[::step], lw=0.7, color="darkorange", alpha=0.8,
+               label=f"price_scale ({lbl0})")
+    axTop.axvspan(lo64, hi64, color="red", alpha=0.08, label="zoom window")
+    axTop.set_title("p_cex vs price_scale — full simulation")
+    axTop.set_ylabel("BTC price [$]")
+    axTop.legend(loc="upper left", fontsize=8)
+    axTop.grid(alpha=0.3)
+
+    # --- One zoom panel per parameter set ---
+    np_colors = ["steelblue", "seagreen", "purple", "teal"]
+    for i, (label, t, price, price_scale, npr) in enumerate(cands):
+        ax = axes[i + 1]
+        tt = t.astype("datetime64[s]")
+        m = (tt >= lo64) & (tt < hi64)
+        ax.plot(tt[m], price[m], lw=0.9, color="black", label="p_cex (real)")
+        ax.plot(tt[m], price_scale[m], lw=0.9, color="darkorange", alpha=0.85,
+                label="price_scale")
+        ax.set_ylabel("BTC price [$]")
+        ax.set_title(f"{ZOOM_LO:%Y-%m-%d} crash — {label}")
+        ax.grid(alpha=0.3)
+        ax.set_xlim(lo64, hi64)
+
+        axNp = ax.twinx()
+        c = np_colors[i % len(np_colors)]
+        axNp.plot(tt[m], npr[m] * 100, lw=1.0, color=c, alpha=0.9, label="net_pressure")
+        axNp.axhline(50, color="crimson", ls="--", lw=1.0, label="50%")
+        axNp.set_ylim(-20, 60)  # shared scale across panels for fair comparison
+        axNp.set_ylabel("net_pressure [%]", color=c)
+        axNp.tick_params(axis="y", labelcolor=c)
+
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = axNp.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=8)
 
     fig.tight_layout()
     if args.save:

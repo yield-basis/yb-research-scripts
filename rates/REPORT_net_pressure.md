@@ -63,25 +63,26 @@ Only the two `mf120` candidates exceed 50%, and **~97% of those points fall on
 
 ![p_cex vs price_scale and the crash](pics/net_pressure_event.png)
 
-Top: `p_cex` and `price_scale` track closely over the full run. Bottom (zoom on
-the crash): as the real price gaps down, the pool's `price_scale` **lags**, so
-`debt = (token0 + token1·price_scale)/2` stays high relative to the now-cheaper
-BTC — driving net_pressure up. The bottom panel overlays the net_pressure of the
-worst candidate (`mf120_of163`) against one that **barely suffered** (`dust600`):
-both peak at the same instant, but the imbalance decays ~15× faster for `dust600`.
+Top: `p_cex` and `price_scale` track closely over the full run. Below it, one
+zoom panel **per parameter set**: as the real price gaps down, the pool's
+`price_scale` **lags**, so `debt = (token0 + token1·price_scale)/2` stays high
+relative to the now-cheaper BTC — driving net_pressure up. We contrast the worst
+parameter set (`btc_a5_mf120_of163_…`) with one that **barely suffered**
+(`btc_a5_mf146_of170_…`, `dust600` variant): both peak at the same instant, but
+the imbalance decays ~15× faster for the `mf146_of170` set.
 
-| threshold | `mf120_of163` (cumulative, window UTC) | `dust600` (cumulative, window UTC) |
-|-----------|----------------------------------------|------------------------------------|
+| threshold | `mf120_of163` (cumulative, window UTC) | `mf146_of170` / dust600 (cumulative, window UTC) |
+|-----------|----------------------------------------|--------------------------------------------------|
 | net_pressure > 20% | **75.0 h** (08-04 17:37 .. 08-07 23:59) | 5.2 h (08-05 06:06 .. 08-05 13:59) |
 | net_pressure > 30% | 25.2 h (08-05 01:06 .. 08-06 13:54) | 0.4 h (08-05 06:24 .. 08-05 06:47) |
 | net_pressure > 40% | 9.7 h (08-05 01:10 .. 08-05 14:39) | none |
 | net_pressure > 50% | 2.0 h (08-05 06:21 .. 08-05 13:36) | none |
 | peak | **+55.07%** @ 08-05 06:24:55 | +33.22% @ 08-05 06:24:55 |
 
-The parameter set matters enormously: `dust600` sheds the same shock in hours and
-never exceeds 40%, while `mf120_of163` carries >20% pressure for three days. So
-the rebalancing parameters set the *size and duration* of the imbalance a slow
-incentive controller would have to close.
+The parameter set matters enormously: the `mf146_of170` set sheds the same shock
+in hours and never exceeds 40%, while `mf120_of163` carries >20% pressure for
+three days. So the rebalancing parameters set the *size and duration* of the
+imbalance a slow incentive controller would have to close.
 
 The key takeaway for the incentive design: the spike is **not a momentary blip**.
 Pressure stays >20% for ~3 days and >40% for ~10 hours around the crash. That is
