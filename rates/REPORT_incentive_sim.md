@@ -25,7 +25,10 @@ Measured anchors (`REPORT_pool_apr_response.md`, `REPORT_liquidity_response.md`)
 * **market norm = Aave USDC APR** — the only series covering 2024–2026 (incl. the
   2024-08-05 stress event). It is spiky (unlike sUSDS), so it is **EMA-smoothed**
   with a 7-day time constant: depositors react to a trailing average, not intraday
-  spikes.
+  spikes. The smoothed series is exported for reuse as `aave_rate_smoothed.csv.xz`
+  (lzma, git-lfs like the other rates data; column `aave_apr_ema7d`, via
+  `smooth_aave.py`); the 7-day EMA tames the raw 1.6–23.5% range to ~1.9–13.0%.
+  `incentive_sim.py` applies the same smoothing internally on its grid.
 
 | element | rule |
 |---------|------|
@@ -40,8 +43,19 @@ Cost `J = spend + λ·undercoverage_area`. Overshoot is self-penalising (a large
 
 **β (deposit elasticity)** is the key unknown: the sink (frac of half-TVL)
 attracted per unit of excess APR ratio above the 2× threshold. High β → crvUSD
-floods in for a small bump (cheap); low β → you must pay a lot. We only have a
-rough anchor for it (the $2M→$68M pool ramp), so we sweep it.
+floods in for a small bump (cheap); low β → you must pay a lot. β is a *depth*
+(steady-state) quantity — distinct from the *speed* τ, which **is** measured (the
+9 d / 4.5 d campaign-relaxation fits). β itself is **not** measured: we have only a
+rough anchor (the $2M→$68M pool ramp at ~13× excess ratio), so we sweep it.
+
+A note on the chosen value: a naive guess is **elasticity ≈ 1**. We use **β = 0.5**,
+deliberately on the *pessimistic* (less elastic, more expensive) side of that —
+because β is unmeasured, erring conservative is prudent, and the β-sweep shows
+coverage is robust to β while only *spend* scales with it (so a pessimistic β just
+over-states cost). If the true response is more elastic (β ≳ 1), the incentive is
+cheaper than the headline ~0.13%/yr. Related: because demand keys off the *ratio*
+`offered/market`, a **lower market rate makes attraction cheaper** — the 2× bar and
+the spend `(x−1)·m·S` both scale with the market rate `m`.
 
 We deliberately do **not** add a smoothness/rate-limit penalty: an incentive
 contract can re-rate arbitrarily fast, and the depositor lag (τ≈9 d) already
@@ -267,6 +281,8 @@ Reproduce the gains: `uv run python incentive_sim.py --controller pid --optimize
   β sweep, PI-vs-PID comparison, the YB buffer (`--buffer`, control-side, default
   0.20), the offer-cap / APR-burst sweep (`--sweep-scap`), and an evaluation-only
   reserve credited as extra insurance (`--eval-reserve`).
+* `smooth_aave.py` — exports the 7-day-EMA Aave norm to `aave_rate_smoothed.csv.xz`
+  (lzma/LFS; raw + `aave_apr_ema7d`).
 
 ```sh
 # no-buffer mechanics (scheme handles all pressure)
