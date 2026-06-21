@@ -58,6 +58,8 @@ TAU_OUT = 4.5 / 365.25    # years
 HYST = 2.0                # dead-band: need 2x market APR to attract crvUSD
 BETA = 0.5                # sink (frac half-TVL) attracted per unit excess ratio
 SCAP = 3.0                # cap on target sink
+BUFFER = 0.20             # net pressure already absorbed by the YB-funded standing
+                          # buffer; the scrvUSD scheme only covers the residual above it
 
 # ----------------------------------------------------------------------------- signal
 
@@ -104,18 +106,21 @@ def ema(series, dt_year, tau_year):
     return out
 
 
-def build_grid(path, dt_hours=4.0, smooth_days=7.0):
+def build_grid(path, dt_hours=4.0, smooth_days=7.0, buffer=BUFFER):
     """Resample pressure and market rate onto a uniform grid.
 
     The Aave norm is spiky (unlike sUSDS), so it is EMA-smoothed with a
     `smooth_days` time constant — depositors react to a trailing average rate,
     not intraday spikes. Returns the smoothed norm `m` plus the raw `m_raw`.
+
+    `buffer` is the net pressure already handled by the YB-funded standing buffer;
+    the scrvUSD scheme only sees the residual `P = max(0, net_pressure - buffer)`.
     """
     t, npr = net_pressure_series(path)
     mt, mapr = load_market()
     step = int(dt_hours * 3600)
     grid = np.arange(t[0], t[-1] + step, step, dtype=np.int64)
-    P = np.clip(np.interp(grid, t, npr), 0.0, None)            # positive pressure only
+    P = np.clip(np.interp(grid, t, npr) - buffer, 0.0, None)   # residual above buffer
     m_raw = np.interp(grid, mt, mapr, left=mapr[0], right=mapr[-1])
     dt_year = step / YEAR
     m = ema(m_raw, dt_year, smooth_days / 365.25)             # smoothed market norm
@@ -139,12 +144,29 @@ def _pi_step(p, Pk, S, state):
     return alpha * Pk + Kp * (Pk - S) + Ki * I, state
 
 
+def _pid_step(p, Pk, S, state):
+    """PI + a derivative term on RISING pressure (dP/dt > 0), driven by how fast
+    the price is gapping. Pre-empts a developing spike before the integral builds.
+    """
+    alpha, Kp, Ki, Kd, Imax = p
+    I = state["I"] + (Pk - S) * state["dt"]
+    I = min(max(I, 0.0), Imax)
+    state["I"] = I
+    dPdt = (Pk - state.get("prevP", Pk)) / state["dt"]   # per year
+    state["prevP"] = Pk
+    return alpha * Pk + Kp * (Pk - S) + Ki * I + Kd * max(0.0, dPdt), state
+
+
 CONTROLLERS = {
     # feed-forward: aim the sink at a multiple of current pressure
     "ff": (["alpha"], [(0.0, 5.0)], _ff_step),
     # proportional-integral on the coverage error, plus feed-forward
     "pi": (["alpha", "Kp", "Ki", "Imax"],
            [(0.0, 3.0), (0.0, 50.0), (0.0, 2000.0), (0.0, 5.0)], _pi_step),
+    # PID: add derivative on rising pressure (the "react to price velocity" term)
+    "pid": (["alpha", "Kp", "Ki", "Kd", "Imax"],
+            [(0.0, 3.0), (0.0, 50.0), (0.0, 2000.0), (0.0, 0.1), (0.0, 5.0)],
+            _pid_step),
 }
 
 
@@ -226,6 +248,57 @@ def sweep_beta(P, m, dt_year, ctrl_name, betas, lam=1.0):
               f"peak_deficit={mt['peak_deficit']*100:5.2f}%  "
               f"mean_x={mt['mean_x_active']:.2f}")
     return rows
+
+
+def compare_controllers(grid, P, m, dt_year, ctrls=("pi", "pid"), beta=BETA,
+                        lam=1.0, save=None):
+    """Optimise several controllers, print metrics, overlay sink on the 2024-08 zoom."""
+    import datetime as dt
+    import matplotlib
+    matplotlib.use("Agg" if save else "QtAgg")
+    import matplotlib.pyplot as plt
+
+    sims = {}
+    for c in ctrls:
+        names, _, _ = CONTROLLERS[c]
+        params, _ = optimize(P, m, dt_year, c, lam=lam, beta=beta)
+        sim = simulate(P, m, dt_year, c, [params[k] for k in names], beta=beta)
+        mt = metrics(P, m, dt_year, sim, lam=lam)
+        sims[c] = (params, sim, mt)
+        print(f"[{c:3s}] coverage={mt['coverage']*100:.2f}%  "
+              f"spend={mt['spend_pa']*100:.4f}%/yr  "
+              f"peak_deficit={mt['peak_deficit']*100:.2f}%  "
+              f"| params: " + ", ".join(f"{k}={v:.4g}" for k, v in params.items()))
+
+    tt = grid.astype("datetime64[s]")
+    lo = np.datetime64("2024-08-01"); hi = np.datetime64("2024-08-15")
+    mwin = (tt >= lo) & (tt < hi)
+    colors = {"pi": "steelblue", "pid": "seagreen", "ff": "purple"}
+
+    fig, (axA, axB) = plt.subplots(2, 1, figsize=(13, 9))
+    # full range
+    axA.plot(tt, P * 100, lw=0.7, color="crimson", label="net pressure P")
+    for c in ctrls:
+        axA.plot(tt, sims[c][1]["S"] * 100, lw=0.9, color=colors.get(c),
+                 label=f"S ({c}), cov {sims[c][2]['coverage']*100:.1f}%, "
+                       f"spend {sims[c][2]['spend_pa']*100:.3f}%/yr")
+    axA.set_ylabel("frac of half-TVL [%]")
+    axA.set_title(f"PI vs PID — full range (beta={beta})")
+    axA.legend(loc="upper right", fontsize=8); axA.grid(alpha=0.3)
+    # 2024-08 zoom
+    axB.plot(tt[mwin], P[mwin] * 100, lw=1.0, color="crimson", label="net pressure P")
+    for c in ctrls:
+        axB.plot(tt[mwin], sims[c][1]["S"][mwin] * 100, lw=1.3, color=colors.get(c),
+                 label=f"S ({c}), peak deficit {sims[c][2]['peak_deficit']*100:.1f}%")
+    axB.set_ylabel("frac of half-TVL [%]"); axB.set_xlim(lo, hi)
+    axB.set_title("Zoom: 2024-08 crash — does the D term catch the spike?")
+    axB.legend(loc="upper right", fontsize=8); axB.grid(alpha=0.3)
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=120); print(f"saved {save}")
+    else:
+        plt.show()
+    return sims
 
 
 def plot_sweep(rows, ctrl_name, save=None):
@@ -316,23 +389,34 @@ def main():
     ap.add_argument("--dt-hours", type=float, default=4.0)
     ap.add_argument("--smooth-days", type=float, default=7.0,
                     help="EMA time constant for the Aave norm (default 7 d)")
+    ap.add_argument("--buffer", type=float, default=BUFFER,
+                    help="net pressure absorbed by the YB-funded buffer (default 0.20)")
     ap.add_argument("--beta", type=float, default=BETA, help="sink per unit excess ratio")
     ap.add_argument("--lam", type=float, default=1.0, help="undercoverage weight")
     ap.add_argument("--optimize", action="store_true")
     ap.add_argument("--sweep-beta", action="store_true",
                     help="re-optimise across a range of beta and plot spend vs coverage")
+    ap.add_argument("--compare-pid", action="store_true",
+                    help="optimise PI vs PID and overlay sink on the 2024-08 zoom")
     ap.add_argument("--params", type=float, nargs="*", help="fixed controller params")
     ap.add_argument("--save", metavar="PNG")
     args = ap.parse_args()
 
     grid, P, m, m_raw, dt_year = build_grid(args.candidate, dt_hours=args.dt_hours,
-                                            smooth_days=args.smooth_days)
+                                            smooth_days=args.smooth_days,
+                                            buffer=args.buffer)
     print(f"grid: {P.size:,} steps  dt={args.dt_hours}h  "
           f"{str(grid[0].astype('datetime64[s]'))[:10]} .. "
           f"{str(grid[-1].astype('datetime64[s]'))[:10]}")
-    print(f"pressure: mean {P.mean()*100:.3f}%  peak {P.max()*100:.2f}%  beta={args.beta}")
+    print(f"residual pressure (above {args.buffer*100:.0f}% buffer): "
+          f"mean {P.mean()*100:.3f}%  peak {P.max()*100:.2f}%  "
+          f"active {(P>0).mean()*100:.1f}% of time  beta={args.beta}")
 
     names, _, _ = CONTROLLERS[args.controller]
+    if args.compare_pid:
+        compare_controllers(grid, P, m, dt_year, ctrls=("pi", "pid"),
+                            beta=args.beta, lam=args.lam, save=args.save)
+        return
     if args.sweep_beta:
         betas = [0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0]
         print(f"sweeping beta for [{args.controller}] controller:")

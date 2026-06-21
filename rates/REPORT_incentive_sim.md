@@ -49,10 +49,17 @@ low-pass-filters the offer — a brief APR spike pulls in almost no extra crvUSD
 costs almost nothing (spend is charged on the slow realised sink). The system's
 own inertia is the filter.
 
-## Result — PI controller on the worst candidate
+**YB-funded buffer.** A standing buffer funded by YB tokens already absorbs net
+pressure up to **~20%**, so in deployment the scheme only sees the residual
+`P = max(0, net_pressure − 0.20)`. The first three sections below analyse the
+scheme *without* the buffer (`--buffer 0`, the scheme handling all pressure) to
+expose the mechanics and the β / derivative behaviour; the final section folds the
+buffer back in.
 
-`mf120_of163` (the parameter set with the largest excursions). Optimised PI,
-β = 0.5:
+## Result — PI controller on the worst candidate (no buffer)
+
+`mf120_of163` (the parameter set with the largest excursions), `--buffer 0`.
+Optimised PI, β = 0.5:
 
 ![PI controller](pics/incentive_pi.png)
 
@@ -85,11 +92,74 @@ Three conclusions:
 3. Even pessimistic (inelastic) β keeps spend **under ~0.4%/yr of half-TVL**. For
    a $100M pool (half-TVL $50M), β = 1 → ~$40k/yr to hold ~98% coverage.
 
+## Does a derivative term help the sharp drops? (PID)
+
+A natural idea for the spike is a **D term** reacting to how fast pressure is
+opening up (driven by price velocity), to pre-empt the move. We add it as a PID
+controller (`Kd · max(0, dP/dt)`) and compare to PI at 1 h resolution (which
+resolves the true 53% peak, unlike the 4 h grid above), `--buffer 0`, β = 0.5:
+
+![PI vs PID, no buffer](pics/incentive_pid_compare_nobuf.png)
+
+| controller | coverage | spend %/yr | peak deficit |
+|------------|---------:|-----------:|-------------:|
+| PI  | 95.0% | 0.108% | 21.39% |
+| PID | **97.5%** | 0.114% | 21.30% |
+
+**D buys the shoulders, not the spike.** Coverage improves +2.5 pp because the
+derivative front-loads the offer at the *onset*, so the sink is already climbing
+when the multi-day plateau arrives (green lifts earlier in the zoom). But the
+**peak deficit barely moves** (21.4→21.3%): a derivative reacts *at* the onset —
+you cannot know a crash before it starts — and with τ_in ≈ 9 d no amount of APR
+fills a ~2 h spike. Proportional, integral and derivative all react at onset and
+all lose the same race against τ. The instantaneous tip is irreducible by
+*reacting*; only a pre-built buffer or a faster sink can cut it.
+
+## Folding in the YB-funded buffer — cheap tail insurance
+
+In deployment the YB-funded buffer absorbs the first 20%, so the scrvUSD scheme
+only sees `P = max(0, net_pressure − 0.20)`. That residual is tiny and rare:
+**mean 0.08%, peak 33%, active only 1.1% of the time** (PI vs PID, 1 h, β = 0.5):
+
+![PI vs PID, 20% buffer](pics/incentive_pid_compare.png)
+
+| controller | residual coverage | spend %/yr | peak deficit |
+|------------|------------------:|-----------:|-------------:|
+| PI  | 82.2% | **0.0059%** | 19.6% |
+| PID | 83.1% | 0.0062% | 19.3% |
+
+1. **The scheme becomes near-free insurance.** Spend collapses ~18× (0.11 →
+   **0.006%/yr** of half-TVL) — it only fires during the handful of excursions
+   above 20% (Jan-24, Apr-24, the Aug-24 crash, Feb-26); otherwise the buffer
+   handles everything and we pay nothing.
+2. **The residual is the un-catchable part by construction.** The buffer absorbs
+   all the easy sustained pressure below 20%; what pokes above is the sharp tip the
+   slow sink still can't chase, so "residual coverage" looks low (~83%) — that is
+   not the system failing. At the worst hour the decomposition is **net pressure
+   53% = 20% buffer + ~14% sink + ~19% uncovered** for a few hours.
+3. **The lingering sink is free.** S stays elevated for days after the residual
+   clears, but once residual hits zero the controller stops offering, so that
+   crvUSD costs no incentive (it just decays with τ_out).
+4. **D barely matters here** (82.2→83.1%): with the sustained shoulders removed by
+   the buffer, the residual is almost entirely the instantaneous tip — nothing
+   reactive catches that.
+
+**Bottom line.** The scrvUSD incentive layer is cheap, rarely-active insurance that
+extends the YB buffer's 20% reach upward. The very peak of a Black-Monday-class
+crash still leaves a short (~hours) ~19%-of-half-TVL uncovered sliver that neither
+the buffer nor reactive incentives close — cutting that needs a *bigger standing
+buffer* or a *faster sink*, not more incentive APR.
+
 ## Scripts
 
-* `incentive_sim.py` — simulator, controllers (`ff`, `pi`), optimiser, β sweep.
+* `incentive_sim.py` — simulator, controllers (`ff`, `pi`, `pid`), optimiser,
+  β sweep, PI-vs-PID comparison, and the YB buffer (`--buffer`, default 0.20).
 
 ```sh
-uv run python incentive_sim.py --controller pi --optimize --save pics/incentive_pi.png
-uv run python incentive_sim.py --controller pi --sweep-beta --save pics/incentive_beta_sweep.png
+# no-buffer mechanics (scheme handles all pressure)
+uv run python incentive_sim.py --controller pi --optimize --buffer 0 --save pics/incentive_pi.png
+uv run python incentive_sim.py --controller pi --sweep-beta --buffer 0 --save pics/incentive_beta_sweep.png
+uv run python incentive_sim.py --compare-pid --dt-hours 1 --buffer 0 --save pics/incentive_pid_compare_nobuf.png
+# deployment with the 20% YB-funded buffer
+uv run python incentive_sim.py --compare-pid --dt-hours 1 --save pics/incentive_pid_compare.png
 ```
