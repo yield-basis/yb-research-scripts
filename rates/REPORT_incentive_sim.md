@@ -204,6 +204,63 @@ Two caveats:
   (measured τ_out<τ_in). Genuinely holding and slowly draining the reserve would
   need a **lock-up / vesting** on incentivised deposits, not just incentive timing.
 
+## Implementation spec (34× peak-APR design)
+
+For someone wiring this into a combined pool+sink simulator or a smart contract.
+Gains are the optimised PID at the 34× cap, β = 0.5, backtested on the worst pool
+parameter set over 2024-01 → 2026-05.
+
+On each update step (timestep `dt` in years; e.g. hourly `dt = 1/8766`), read the
+pool and form the signal `P = max(0, net_pressure)`, where
+`net_pressure = 2·(debt − b0)/(b0 + b1·p)` with `b0` = crvUSD balance, `b1` = BTC
+balance, `p` = BTC price, and `debt` = LevAMM debt (≈ `(b0 + b1·price_scale)/2` if
+not exposed) — so `P` is a dimensionless fraction of *half-TVL*. Read the market
+norm `m` = Aave-USDC supply APR pushed through a **7-day EMA** (a fraction, e.g.
+0.04; smoothing matters because Aave is spiky, unlike sUSDS). Track `S` = the
+incremental crvUSD currently parked in scrvUSD because of this program (fraction of
+half-TVL). Run a PID on the coverage error `e = P − S` to get a target sink
+`S* = clip( α·P + Kp·e + Ki·I + Kd·max(0, dP/dt), 0, S_cap )`, with integral
+`I ← clip(I + e·dt, 0, Imax)` and the derivative taken on **rising pressure only**;
+numbers **α = 1.34, Kp = 50, Ki = 1610 /yr, Kd = 0.0122 yr, Imax = 3.18,
+S_cap = 16**. Map the target to an advertised scrvUSD APR multiple `x = 2 + S*/β`
+with **β = 0.5** (deposit elasticity: fraction of half-TVL attracted per unit of
+APR-multiple above the dead-band), **hard-capped at x_max = 34×**, and set the
+scrvUSD **bonus APR = (x − 1)·m**, paid only on the program's attracted deposits
+`S` (not the whole vault). The "`2 +`" encodes the measured **hysteresis** — crvUSD
+holders don't switch until scrvUSD pays ≥ 2× market — and the cap is the single knob
+that sets worst-case fill speed. The contract itself only sets the APR; in a
+combined pool+sink simulator, model the depositor response as
+`dS/dt = (S* − S)/τ` with **τ_in = 9 d** while filling (`S* > S`) and
+**τ_out = 4.5 d** while draining, which reproduces the measured ramps.
+
+Backtested behaviour: the offer sits at 1× almost always and spikes to its 34×
+ceiling only during sharp de-pegs (**active 7.6% of the time, mean 3.9× when
+active**), average incentive spend **≈ 0.13%/yr of half-TVL**, covering **99.4%** of
+all positive net pressure with a worst-case instantaneous shortfall of **3.8% of
+half-TVL**; stacking the existing **20%-of-net-pressure YB-token reserve** on top
+takes the worst-case uncovered net pressure to **0.0%** over the whole period incl.
+the 2024-08-05 crash (a 10% reserve would instead need the burst raised toward ~22×
+to also reach zero). Two caveats to carry into the simulator: the fast fill assumes
+deposit velocity keeps scaling with APR at 34× (unverified above ~2× steps — likely
+optimistic, so treat 34× as a ceiling, not a promise), and mercenary capital that
+arrives for 34× will also leave fast when the bonus ends (`τ_out`), so to drain the
+reserve slowly rather than whipsaw you'd add a lock-up/vesting on incentivised
+deposits.
+
+| symbol | value | role |
+|--------|-------|------|
+| dead-band | 2× market | hysteresis activation threshold |
+| x_max | 34× market | APR ceiling (worst-case fill speed) |
+| β | 0.5 | deposit elasticity (sink per excess APR-multiple) |
+| α, Kp, Ki, Kd, Imax | 1.34, 50, 1610/yr, 0.0122 yr, 3.18 | PID gains (P,S in frac half-TVL, time in yr) |
+| S_cap | 16 | target-sink clamp (= x_max via 2 + S_cap/β) |
+| EMA(market) | 7 d | smoothing of the Aave norm |
+| τ_in / τ_out | 9 d / 4.5 d | depositor fill / drain (simulator only) |
+| reserve | 20% (YB) | standing buffer stacked on top |
+
+Reproduce the gains: `uv run python incentive_sim.py --controller pid --optimize
+--dt-hours 1 --beta 0.5 --buffer 0 --scap 20 --eval-reserve 0.20`.
+
 ## Scripts
 
 * `incentive_sim.py` — simulator, controllers (`ff`, `pi`, `pid`), optimiser,
