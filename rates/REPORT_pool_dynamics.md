@@ -59,14 +59,20 @@ Optimised against log-TVL (one ODE, whole series):
 | quantity | value |
 |----------|-------|
 | **τ_in** (base inflow) | **30 d** (rail; see note) |
-| **τ_out** (outflow) | **6.1 d** |
-| **p_in** (tiny-pool rush) | **0.83** |
-| **dead band** (equilibrium) | **[1.50×, 2.04×] market** |
-| R² (log-TVL) | **0.975** |
+| **τ_out** (outflow) | **5.9 d** |
+| **p_in** (tiny-pool rush) | **1.03** |
+| **dead band** (equilibrium) | **[1.50×, 2.14×] market** |
+| R² (log-TVL) | **0.974** |
 
-(R² progression: 0.921 plain → 0.931 with the tiny-pool rush → 0.956 with the
-Votemarket LM YB → **0.975** once the LP-reward epochs are shifted +1 week off the
-voting window.)
+(R² progression at the original 1k-point resolution: 0.921 plain → 0.931 with the
+tiny-pool rush → 0.956 with the Votemarket LM YB → 0.975 once the LP-reward epochs
+are shifted +1 week off the voting window. `pool_apr.csv.xz` is now sampled at
+**10,000 points** (~38-min spacing) so the day-scale rush-ins resolve; the fit is
+unchanged, R² 0.974.)
+
+The figure's bottom row zooms the two tiny-pool take-offs (Oct-2025, Feb-2026) on a
+~3-day, semilogy scale — they show the rush is a burst of **discrete deposit steps**
+from ~$1.5M to ~$40M within a day, which the smooth relaxation rides as an envelope.
 
 * **Equilibrium rate:** capital flows until the (endogenous) APR is driven down to
   the top edge (~2.2× sUSDS) and bleeds out until it climbs to the bottom edge

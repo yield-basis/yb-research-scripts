@@ -61,6 +61,13 @@ def _ts(s):
     return int(dt.datetime.fromisoformat(s).replace(tzinfo=dt.UTC).timestamp())
 
 
+# ~3-day zoom windows around the tiny-pool take-offs (steepest rush-ins).
+RUSH_WINDOWS = [
+    ("2025-10-16", "2025-10-19", "Oct 2025 rush-in"),
+    ("2026-01-31", "2026-02-03", "Feb 2026 rush-in"),
+]
+
+
 def trailing_apr(ts, x, win_days=14.0):
     """Annualised trailing growth of x (fraction, not %)."""
     w = win_days * 86400
@@ -166,6 +173,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--x-lo", type=float, default=None, help="fix outflow band edge")
     ap.add_argument("--x-hi", type=float, default=None, help="fix inflow band edge")
+    ap.add_argument("--linear", action="store_true",
+                    help="linear TVL y-axis (default: semilogy, matching the log-space fit)")
     ap.add_argument("--save", metavar="PNG")
     args = ap.parse_args()
 
@@ -188,12 +197,23 @@ def main():
     matplotlib.use("Agg" if args.save else "QtAgg")
     import matplotlib.pyplot as plt
     tt = S["t"].astype("datetime64[s]")
-    fig, (axL, axA) = plt.subplots(2, 1, figsize=(13, 8), sharex=True)
+    zkeys = [f"z{i}" for i in range(len(RUSH_WINDOWS))]
+    fig, axd = plt.subplot_mosaic([["full"] * len(zkeys), ["apr"] * len(zkeys), zkeys],
+                                  figsize=(13, 11), height_ratios=[3, 2, 3])
+    axL, axA = axd["full"], axd["apr"]
+    axA.sharex(axL)
+
     axL.plot(tt, S["L"] / 1e6, lw=1.6, color="black", label="measured staked TVL")
     axL.plot(tt, L / 1e6, lw=1.4, color="crimson", ls="--", label="model TVL")
-    axL.fill_between(tt, 0, 70, where=S["yb_on"], color="orange", alpha=0.10,
-                     label="YB campaign on")
-    axL.set_ylabel("staked TVL [$M]")
+    if args.linear:
+        axL.fill_between(tt, 0, 70, where=S["yb_on"], color="orange", alpha=0.10,
+                         label="YB campaign on")
+        axL.set_ylabel("staked TVL [$M]")
+    else:
+        axL.set_yscale("log"); axL.set_ylim(0.5, 100)
+        axL.fill_between(tt, 0.5, 100, where=S["yb_on"], color="orange", alpha=0.10,
+                         label="YB campaign on")
+        axL.set_ylabel("staked TVL [$M, log]")
     axL.set_title(f"pyUSD/crvUSD TVL dynamics fit — τin {tin:.0f}d / τout {tout:.0f}d, "
                   f"p_in {p_in:.2f}, band [{xlo:.2f}, {xhi:.2f}]×, R² {r2:.3f}")
     axL.legend(loc="upper left", fontsize=8); axL.grid(alpha=0.3)
@@ -203,6 +223,19 @@ def main():
     axA.axhline(xlo, color="red", ls="--", lw=0.9, label=f"x_lo {xlo:.2f}× (outflow edge)")
     axA.set_ylabel("APR / market rate"); axA.set_yscale("log")
     axA.legend(loc="upper right", fontsize=8); axA.grid(alpha=0.3)
+
+    # zoom panels on the tiny-pool rush-ins (semilogy)
+    for key, (s0, e0, lab) in zip(zkeys, RUSH_WINDOWS):
+        az = axd[key]
+        lo, hi = np.datetime64(s0), np.datetime64(e0)
+        seg = (tt >= lo) & (tt < hi)
+        az.plot(tt[seg], S["L"][seg] / 1e6, lw=1.6, color="black", label="measured")
+        az.plot(tt[seg], L[seg] / 1e6, lw=1.6, color="crimson", ls="--", label="model")
+        az.set_yscale("log"); az.set_xlim(lo, hi)
+        az.set_title(lab, fontsize=9); az.set_ylabel("TVL [$M, log]")
+        az.grid(alpha=0.3, which="both"); az.legend(fontsize=7, loc="upper left")
+        for t in az.get_xticklabels():
+            t.set_rotation(20); t.set_fontsize(7)
     fig.tight_layout()
     if args.save:
         fig.savefig(args.save, dpi=120); print(f"saved {args.save}")
