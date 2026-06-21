@@ -18,10 +18,18 @@ rewards(t)   = CRV_value(t) + YB_value(t)                 [$/yr]
 APR a(t,L)   = fee_apr(t) + rewards / L
 x            = a / m(t)            m = sUSDS market rate
 dead band [x_lo, x_hi]:
-    x > x_hi : inflow   toward L*_in  = rewards/(x_hi·m − fee),  rate 1/τ_in
+    x > x_hi : inflow   toward L*_in  = rewards/(x_hi·m − fee),  rate (1/τ_in)·(x/x_hi)^p_in
     x < x_lo : outflow  toward L*_out = rewards/(x_lo·m − fee),  rate 1/τ_out
     else     : hold (LPs inert inside the band)
 ```
+
+**Tiny-pool rush (`p_in`).** A pool starting tiny has a huge APR (`rewards/L`), which
+should pull capital in *faster* than a near-full pool — not just by a larger gap to
+`L*`, but because the offer is far more attractive. The plain exponential (fixed
+`1/τ_in`) can't express that: at the steepest take-offs the model lagged measured TVL
+by ~7% (`model/measured ≈ 0.93` when TVL ramps >5%/day). The factor `(x/x_hi)^p_in`
+accelerates inflow the further APR sits above the threshold (`p_in=0` recovers the
+plain model); with it the lag vanishes (`model/measured ≈ 1.01`).
 
 `CRV_value = crv_rate · gauge_rel_weight · CRV_price · yr` and
 `YB_value = yb_rate · YB_price · yr` (gated to `timestamp < period_finish`), both
@@ -43,19 +51,24 @@ Optimised against log-TVL (one ODE, whole series):
 
 | quantity | value |
 |----------|-------|
-| **τ_in** (inflow) | **10.7 d** |
-| **τ_out** (outflow) | **8.0 d** |
-| **dead band** (equilibrium) | **[1.48×, 2.34×] market** |
-| R² (log-TVL) | 0.92 |
+| **τ_in** (base inflow) | **30 d** (rail; see note) |
+| **τ_out** (outflow) | **8.2 d** |
+| **p_in** (tiny-pool rush) | **0.78** |
+| **dead band** (equilibrium) | **[1.50×, 2.16×] market** |
+| R² (log-TVL) | **0.931** (vs 0.921 without the rush) |
 
 * **Equilibrium rate:** capital flows until the (endogenous) APR is driven down to
-  the top edge (~2.3× sUSDS) and bleeds out until it climbs to the bottom edge
+  the top edge (~2.2× sUSDS) and bleeds out until it climbs to the bottom edge
   (~1.5×) — so the equilibrium LP APR sits inside that band, anchored to the market
-  rate. (The unified fit's band runs a bit higher than the earlier instantaneous
-  estimate `[1×, 1.9×]`; here the edges also set the absolute TVL levels via
-  `L* = rewards/(x·m − fee)`, so they do double duty.)
-* **Reaction times** match the campaign-relaxation fits (τ_in ~9–11 d, τ_out a bit
-  slower here at 8 d vs the 4–5 d instantaneous estimate).
+  rate. (The edges also set the absolute TVL levels via `L* = rewards/(x·m − fee)`,
+  so they do double duty.)
+* **Reaction times:** τ_out ≈ 8 d (outflow). With the rush term the *base* τ_in
+  rails high (≥30 d) — i.e. inflow near equilibrium is slow, and almost all the
+  observed filling happens in the **rush regime**, where the effective inflow time
+  is `τ_in·(x_hi/x)^p_in` (e.g. ~5 d when APR is 10× the threshold). So "how fast
+  LPs arrive" is dominated by *how attractive* the pool is, not a single constant.
+* The earlier per-campaign fits (τ_in ~9–11 d) measured an effective inflow during
+  high-APR campaigns — consistent with the rush regime here, not the slow base τ_in.
 
 ## Incentive accounting — two things that look missing but aren't
 

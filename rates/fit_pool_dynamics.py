@@ -76,7 +76,7 @@ def load_series():
     return dict(t=t, L=L, fee=fee, crv_val=crv_val, yb_val=yb_val, m=m, yb_on=yb_on)
 
 
-def simulate(S, tau_in_d, tau_out_d, x_lo, x_hi):
+def simulate(S, tau_in_d, tau_out_d, x_lo, x_hi, p_in=0.0):
     t, fee, crv_val, yb_val, m = S["t"], S["fee"], S["crv_val"], S["yb_val"], S["m"]
     tau_in, tau_out = tau_in_d / 365.0, tau_out_d / 365.0
     n = t.size
@@ -93,7 +93,10 @@ def simulate(S, tau_in_d, tau_out_d, x_lo, x_hi):
         if x > x_hi:
             denom = x_hi * m[k] - fee[k]
             Lt = rewards / denom if denom > 1e-6 else Lk * 4
-            Lk = Lk + (Lt - Lk) * (dt / tau_in)
+            # rush: inflow accelerates the further APR is above threshold (tiny-pool
+            # appeal). p_in=0 -> plain exponential. Cap the step at the full gap.
+            frac = (dt / tau_in) * (x / x_hi) ** p_in
+            Lk = Lk + (Lt - Lk) * min(frac, 1.0)
         elif x < x_lo:
             denom = x_lo * m[k] - fee[k]
             Lt = rewards / denom if denom > 1e-6 else Lk * 0.25
@@ -111,19 +114,24 @@ def loss(S, params):
 
 
 def fit(S, seed=0, band=None):
-    """band=(x_lo, x_hi) fixes the dead-band; None fits all four parameters."""
+    """Fit [tau_in, tau_out, x_lo, x_hi, p_in]. band=(x_lo,x_hi) fixes the
+    dead-band. p_in is the inflow-acceleration exponent (0 = plain exponential)."""
     from scipy.optimize import differential_evolution
-    if band is None:
-        bounds = [(1.0, 30.0), (1.0, 30.0), (0.7, 1.5), (1.5, 3.0)]
-        res = differential_evolution(lambda p: loss(S, p), bounds, seed=seed,
-                                     maxiter=60, tol=1e-5, polish=True, updating="deferred")
-        return res.x, res.fun
-    xlo, xhi = band
-    bounds = [(1.0, 30.0), (1.0, 30.0)]
-    res = differential_evolution(lambda p: loss(S, [p[0], p[1], xlo, xhi]),
-                                 bounds, seed=seed, maxiter=60, tol=1e-5,
-                                 polish=True, updating="deferred")
-    return np.array([res.x[0], res.x[1], xlo, xhi]), res.fun
+    full = {"tin": (1.0, 30.0), "tout": (1.0, 30.0), "xlo": (0.7, 1.5),
+            "xhi": (1.5, 3.0), "p": (0.0, 4.0)}
+    free = ["tin", "tout"] + ([] if band else ["xlo", "xhi"]) + ["p"]
+    bounds = [full[k] for k in free]
+
+    def build(pp):
+        v = {"tin": None, "tout": None, "xlo": band[0] if band else None,
+             "xhi": band[1] if band else None, "p": 0.0}
+        for k, val in zip(free, pp):
+            v[k] = val
+        return [v["tin"], v["tout"], v["xlo"], v["xhi"], v["p"]]
+
+    res = differential_evolution(lambda pp: loss(S, build(pp)), bounds, seed=seed,
+                                 maxiter=60, tol=1e-5, polish=True, updating="deferred")
+    return np.array(build(res.x)), res.fun
 
 
 def main():
@@ -137,7 +145,7 @@ def main():
     S = load_series()
     band = (args.x_lo, args.x_hi) if (args.x_lo and args.x_hi) else None
     params, J = fit(S, band=band)
-    tin, tout, xlo, xhi = params
+    tin, tout, xlo, xhi, p_in = params
     L, a = simulate(S, *params)
     # R^2 in log space
     e = np.log(L) - np.log(S["L"])
@@ -145,6 +153,7 @@ def main():
     print(f"fit (log-RMSE {np.sqrt(J):.3f}, R^2 {r2:.3f}):")
     print(f"  tau_in        = {tin:.1f} d")
     print(f"  tau_out       = {tout:.1f} d")
+    print(f"  p_in (rush)   = {p_in:.2f}   (0 = plain exponential)")
     print(f"  dead band     = [{xlo:.2f}×, {xhi:.2f}×] market"
           + ("  (fixed)" if band else ""))
 
@@ -158,8 +167,8 @@ def main():
     axL.fill_between(tt, 0, 70, where=S["yb_on"], color="orange", alpha=0.10,
                      label="YB campaign on")
     axL.set_ylabel("staked TVL [$M]")
-    axL.set_title(f"pyUSD/crvUSD TVL dynamics fit — "
-                  f"τin {tin:.0f}d / τout {tout:.0f}d, band [{xlo:.2f}, {xhi:.2f}]×, R² {r2:.3f}")
+    axL.set_title(f"pyUSD/crvUSD TVL dynamics fit — τin {tin:.0f}d / τout {tout:.0f}d, "
+                  f"p_in {p_in:.2f}, band [{xlo:.2f}, {xhi:.2f}]×, R² {r2:.3f}")
     axL.legend(loc="upper left", fontsize=8); axL.grid(alpha=0.3)
 
     axA.plot(tt, a / S["m"], lw=1.0, color="steelblue", label="APR / market (x)")
