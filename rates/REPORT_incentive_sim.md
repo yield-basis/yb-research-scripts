@@ -140,20 +140,69 @@ only sees `P = max(0, net_pressure − 0.20)`. That residual is tiny and rare:
 3. **The lingering sink is free.** S stays elevated for days after the residual
    clears, but once residual hits zero the controller stops offering, so that
    crvUSD costs no incentive (it just decays with τ_out).
-4. **D barely matters here** (82.2→83.1%): with the sustained shoulders removed by
-   the buffer, the residual is almost entirely the instantaneous tip — nothing
-   reactive catches that.
+4. **D barely matters at a *capped* offer** (82.2→83.1%): with the sustained
+   shoulders removed by the buffer, the residual is almost entirely the
+   instantaneous tip, which a capped reactive controller can't catch. Letting the
+   offer **spike** is what catches it — next section.
 
-**Bottom line.** The scrvUSD incentive layer is cheap, rarely-active insurance that
-extends the YB buffer's 20% reach upward. The very peak of a Black-Monday-class
-crash still leaves a short (~hours) ~19%-of-half-TVL uncovered sliver that neither
-the buffer nor reactive incentives close — cutting that needs a *bigger standing
-buffer* or a *faster sink*, not more incentive APR.
+This "residual-control" design is cheap (≈0.006%/yr) but **relies on the reserve**
+and still leaves a large peak gap unless the offer is uncapped. The next section
+takes the opposite, more robust tack.
+
+## Filling the spike with a high APR burst
+
+The ~19–21% peak deficit above was a **cap artifact**, not a τ wall: the inflow
+rate `dS/dt = (S*−S)/τ` scales with the target `S*` (hence with the offered APR),
+so a large enough short burst fills the spike even with τ_in ≈ 9 d.
+
+The robust design: **size the scheme for the full net pressure** (`--buffer 0`, no
+reliance on the reserve), and treat the 20% YB reserve as **extra insurance
+credited only at evaluation** (`--eval-reserve 0.20`) — so coverage does not depend
+on how big the reserve actually is. Raising the offer cap and re-optimising the PID
+(1 h grid, β = 0.5):
+
+![burst fills the spike](pics/incentive_scap_sweep.png)
+
+| peak offered APR | peak deficit, scheme alone | spend %/yr | **max uncovered w/ 20% reserve** | time uncovered w/ reserve |
+|-----------------:|---------------------------:|-----------:|---------------------------------:|--------------------------:|
+| 8×  | 21.3% | 0.114% | 1.30% | ~0% |
+| 12× | 14.7% | 0.119% | **0.00%** | 0% |
+| 22× | 8.4%  | 0.126% | 0.00% | 0% |
+| 34× | 3.8%  | 0.128% | 0.00% | 0% |
+
+1. **The scheme alone fills the spike with a burst.** Peak deficit collapses
+   21→3.8% as the offer goes 8→34×, while **spend rises only 0.114→0.128%/yr** of
+   half-TVL — a high APR paid on a small, briefly-growing sink for a few hours is
+   cheap. (Raising the offer cap reduces *scheme-alone* uncovered *time* ~3× for
+   ~0.014%/yr extra — the "remarkable" trade.)
+2. **With the 20% reserve as insurance on top, the worst crash is fully covered.**
+   At just **12×** the max net pressure left uncovered over the whole 2.4-year run
+   (incl. 2024-08-05) is **0.0%**; even at 8× it is 1.30% at a single peak hour
+   (~0% of the time). Because the scheme is sized for the full pressure, this does
+   **not** depend on the reserve being exactly 20% — the reserve is pure margin.
+3. **Affordability.** 0.1–0.2%/yr of half-TVL is a price worth paying to make
+   coverage independent of the reserve's size — extra insurance, not a dependency.
+
+Two caveats:
+
+* **Linear deposit velocity.** This assumes a 34× offer pulls crvUSD ~17× faster
+  than a 2× offer (`dS/dt ∝ S*`). The measured τ≈9 d was at ~2× steps; the
+  high-APR regime is unmeasured and real depositors likely **saturate** (only so
+  much crvUSD can bridge in an hour). The high-APR end is therefore optimistic —
+  but note even the low end (8×, well inside measured range) is fully covered with
+  the reserve.
+* **Fast in, slow out needs stickiness.** The burst fills fast (large `S*−S` gap);
+  when pressure clears the reserve drains at τ_out≈4.5 d — gentler than it filled.
+  But mercenary capital that came for 34× will also leave fast once the APR drops
+  (measured τ_out<τ_in). Genuinely holding and slowly draining the reserve would
+  need a **lock-up / vesting** on incentivised deposits, not just incentive timing.
 
 ## Scripts
 
 * `incentive_sim.py` — simulator, controllers (`ff`, `pi`, `pid`), optimiser,
-  β sweep, PI-vs-PID comparison, and the YB buffer (`--buffer`, default 0.20).
+  β sweep, PI-vs-PID comparison, the YB buffer (`--buffer`, control-side, default
+  0.20), the offer-cap / APR-burst sweep (`--sweep-scap`), and an evaluation-only
+  reserve credited as extra insurance (`--eval-reserve`).
 
 ```sh
 # no-buffer mechanics (scheme handles all pressure)
@@ -162,4 +211,7 @@ uv run python incentive_sim.py --controller pi --sweep-beta --buffer 0 --save pi
 uv run python incentive_sim.py --compare-pid --dt-hours 1 --buffer 0 --save pics/incentive_pid_compare_nobuf.png
 # deployment with the 20% YB-funded buffer
 uv run python incentive_sim.py --compare-pid --dt-hours 1 --save pics/incentive_pid_compare.png
+# high APR burst: scheme covers full pressure, reserve credited as extra insurance
+uv run python incentive_sim.py --controller pid --sweep-scap --dt-hours 1 --buffer 0 \
+    --eval-reserve 0.20 --save pics/incentive_scap_sweep.png
 ```

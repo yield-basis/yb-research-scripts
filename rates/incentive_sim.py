@@ -198,10 +198,15 @@ def simulate(P, m, dt_year, ctrl_name, params, beta=BETA, scap=SCAP,
     return {"S": S, "Star": Star, "x": x, "iapr": iapr, "spend_rate": spend_rate}
 
 
-def metrics(P, m, dt_year, sim, lam=1.0):
+def metrics(P, m, dt_year, sim, lam=1.0, eval_reserve=0.0):
+    """eval_reserve: a flat standing reserve (e.g. the 20% YB buffer) applied ONLY
+    at evaluation, on top of the controller's sink — it does not change the control
+    (the scheme is sized for the full pressure). Reports the residual uncovered
+    once that reserve also absorbs its share at each step."""
     S = sim["S"]
     spend = float(np.sum(sim["spend_rate"]) * dt_year)             # frac-half-TVL * APR * yr
     deficit = np.clip(P - S, 0.0, None)
+    deficit_res = np.clip(deficit - eval_reserve, 0.0, None)       # with reserve on top
     under = float(np.sum(deficit) * dt_year)
     p_area = float(np.sum(P) * dt_year)
     years = P.size * dt_year
@@ -212,8 +217,14 @@ def metrics(P, m, dt_year, sim, lam=1.0):
         "under": under,
         "coverage": 1.0 - under / p_area if p_area > 0 else 1.0,
         "peak_deficit": float(deficit.max()),
+        # fraction of all time with a meaningful uncovered shortfall (> 1% half-TVL)
+        "frac_uncov": float(np.mean(deficit > 0.01)),
+        # same, but crediting the eval_reserve as extra capacity on top
+        "peak_deficit_res": float(deficit_res.max()),
+        "frac_uncov_res": float(np.mean(deficit_res > 0.01)),
         "spend_pa": spend / years,            # annualised, as frac of half-TVL
         "mean_x_active": float(sim["x"][active].mean()) if active.any() else 0.0,
+        "peak_x": float(sim["x"].max()),
         "frac_active": float(active.mean()),
         "years": years,
     }
@@ -299,6 +310,59 @@ def compare_controllers(grid, P, m, dt_year, ctrls=("pi", "pid"), beta=BETA,
     else:
         plt.show()
     return sims
+
+
+def sweep_scap(P, m, dt_year, ctrl_name, scaps, beta=BETA, lam=1.0, eval_reserve=0.0):
+    """Re-optimise while raising the offer cap (SCAP): how high an APR burst is
+    needed to fill the sharp spike, and how much peak deficit it buys back.
+
+    eval_reserve (e.g. 0.20) is credited only at evaluation as extra capacity on
+    top of the scheme — the controller still covers the full pressure itself."""
+    names, _, _ = CONTROLLERS[ctrl_name]
+    rows = []
+    for sc in scaps:
+        params, _ = optimize(P, m, dt_year, ctrl_name, lam=lam, beta=beta, scap=sc)
+        sim = simulate(P, m, dt_year, ctrl_name, [params[k] for k in names],
+                       beta=beta, scap=sc)
+        mt = metrics(P, m, dt_year, sim, lam=lam, eval_reserve=eval_reserve)
+        mt["scap"] = sc
+        rows.append(mt)
+        extra = (f"  | w/{eval_reserve*100:.0f}%-reserve: "
+                 f"max_uncov={mt['peak_deficit_res']*100:5.2f}%  "
+                 f"time={mt['frac_uncov_res']*100:.2f}%") if eval_reserve > 0 else ""
+        print(f"  scap={sc:5.1f}  peak_deficit={mt['peak_deficit']*100:5.2f}%  "
+              f"uncovered={mt['frac_uncov']*100:5.2f}% of time  "
+              f"peak_APR={mt['peak_x']:5.1f}x  "
+              f"spend={mt['spend_pa']*100:.4f}%/yr" + extra)
+    return rows
+
+
+def plot_scap(rows, eval_reserve=0.0, save=None):
+    import matplotlib
+    matplotlib.use("Agg" if save else "QtAgg")
+    import matplotlib.pyplot as plt
+    px = [r["peak_x"] for r in rows]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.plot(px, [r["peak_deficit"] * 100 for r in rows], "o-", color="crimson",
+            label="peak deficit, scheme alone [% half-TVL]")
+    ax.plot(px, [r["frac_uncov"] * 100 for r in rows], "s-", color="darkorange",
+            label="time uncovered, scheme alone [%]")
+    if eval_reserve > 0:
+        ax.plot(px, [r["peak_deficit_res"] * 100 for r in rows], "o--", color="darkred",
+                label=f"max uncovered w/ {eval_reserve*100:.0f}% reserve [%]")
+        ax.plot(px, [r["frac_uncov_res"] * 100 for r in rows], "s--", color="saddlebrown",
+                label=f"time uncovered w/ {eval_reserve*100:.0f}% reserve [%]")
+    ax.set_xlabel("peak offered APR (multiple of market)")
+    ax.set_ylabel("peak deficit [%]  /  time uncovered [%]")
+    ax.set_xscale("log")
+    ax.grid(alpha=0.3)
+    ax.set_title("High short APR burst fills the spike (scheme covers full pressure, PID)")
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=120); print(f"saved {save}")
+    else:
+        plt.show()
 
 
 def plot_sweep(rows, ctrl_name, save=None):
@@ -398,6 +462,11 @@ def main():
                     help="re-optimise across a range of beta and plot spend vs coverage")
     ap.add_argument("--compare-pid", action="store_true",
                     help="optimise PI vs PID and overlay sink on the 2024-08 zoom")
+    ap.add_argument("--sweep-scap", action="store_true",
+                    help="raise the offer cap and see how a high APR burst fills the spike")
+    ap.add_argument("--scap", type=float, default=SCAP, help="offer cap (target sink)")
+    ap.add_argument("--eval-reserve", type=float, default=0.0,
+                    help="standing reserve credited only at evaluation (extra insurance)")
     ap.add_argument("--params", type=float, nargs="*", help="fixed controller params")
     ap.add_argument("--save", metavar="PNG")
     args = ap.parse_args()
@@ -423,8 +492,16 @@ def main():
         rows = sweep_beta(P, m, dt_year, args.controller, betas, lam=args.lam)
         plot_sweep(rows, args.controller, save=args.save)
         return
+    if args.sweep_scap:
+        scaps = [3.0, 5.0, 10.0, 20.0, 40.0, 80.0]
+        print(f"sweeping offer cap (scap) for [{args.controller}] controller:")
+        rows = sweep_scap(P, m, dt_year, args.controller, scaps,
+                          beta=args.beta, lam=args.lam, eval_reserve=args.eval_reserve)
+        plot_scap(rows, eval_reserve=args.eval_reserve, save=args.save)
+        return
     if args.optimize:
-        params, J = optimize(P, m, dt_year, args.controller, lam=args.lam, beta=args.beta)
+        params, J = optimize(P, m, dt_year, args.controller, lam=args.lam,
+                             beta=args.beta, scap=args.scap)
         print(f"optimised [{args.controller}] J={J:.4g}: "
               + ", ".join(f"{k}={v:.4g}" for k, v in params.items()))
         params = [params[k] for k in names]
@@ -436,12 +513,14 @@ def main():
         params = defaults[args.controller]
     print("params:", dict(zip(names, params)))
 
-    sim = simulate(P, m, dt_year, args.controller, params, beta=args.beta)
+    sim = simulate(P, m, dt_year, args.controller, params, beta=args.beta, scap=args.scap)
     mets = metrics(P, m, dt_year, sim, lam=args.lam)
     print(f"coverage      : {mets['coverage']*100:.2f}%")
     print(f"peak deficit  : {mets['peak_deficit']*100:.2f}% of half-TVL")
+    print(f"time uncovered: {mets['frac_uncov']*100:.2f}% (deficit > 1% half-TVL)")
     print(f"spend         : {mets['spend_pa']*100:.4f}%/yr of half-TVL  (total {mets['spend']:.4g})")
-    print(f"mean x active : {mets['mean_x_active']:.2f}  (active {mets['frac_active']*100:.1f}% of time)")
+    print(f"offer (x)     : mean {mets['mean_x_active']:.2f}x active, peak {mets['peak_x']:.1f}x "
+          f"(active {mets['frac_active']*100:.1f}% of time)")
 
     plot(grid, P, m, m_raw, sim, mets, args.controller, params, save=args.save)
 
