@@ -14,6 +14,34 @@ All quantities are in **normalised units** — `P` (pressure) and `S` (sink) are
 fractions of half-TVL, i.e. the same units as `net_pressure`, so results are
 scale-free (multiply by half-TVL for dollars).
 
+## Scaling — why pool-fraction units
+
+The target here is growth from today's ~**$120M** in pools (where net pressure is
+observed) toward **billions**, so everything is deliberately expressed as a
+**fraction of the pool's half-TVL** rather than against external absolute TVLs.
+Consequences:
+
+* **Every headline number is scale-free.** The ~0.13%/yr spend, the 2.7%/0%
+  uncovered figures, and the 34× APR ceiling hold identically at $120M or $10B.
+  Funding is self-consistent too: spend is a fraction of TVL, and so is the
+  YB-earnings (negative-APR) budget that pays for it — they co-scale.
+* **β is scale-invariant *iff* crvUSD supply co-scales with the pools.** β = 0.5
+  (= 1/dead_band, giving the tidy `x = dead_band·(1 + S*)`) implicitly assumes the
+  responding crvUSD/scrvUSD depth is ~1 half-TVL per unit excess. That holds at
+  small scale (the responding market dwarfs a small pool) and is plausible at scale
+  *because these pools are themselves a primary crvUSD sink* — but if pool growth
+  outruns crvUSD liquidity, β (pool-normalised) **shrinks** and the incentive gets
+  pricier. So at billions, read β = 0.5 as a **central** estimate, with tail risk
+  "crvUSD supply doesn't keep pace", not as conservative.
+* **Coverage is robust to β; only spend scales with it** (the β-sweep). So a
+  mis-estimated β changes the *price*, not feasibility — and the price stays a
+  fraction of TVL.
+* **The scale-sensitive assumption is the burst.** Pulling a large *fraction* of a
+  billions-scale pool within hours means moving a huge *absolute* amount of crvUSD
+  fast — exactly where the unmeasured "deposit velocity vs APR" assumption (treat
+  34× as a ceiling, not a promise) is most strained. Pressure-test this before
+  trusting the fast-fill result at scale.
+
 ## Model
 
 Measured anchors (`REPORT_pool_apr_response.md`, `REPORT_liquidity_response.md`):
@@ -49,13 +77,17 @@ floods in for a small bump (cheap); low β → you must pay a lot. β is a *dept
 rough anchor (the $2M→$68M pool ramp at ~13× excess ratio), so we sweep it.
 
 A note on the chosen value: a naive guess is **elasticity ≈ 1**. We use **β = 0.5**,
-deliberately on the *pessimistic* (less elastic, more expensive) side of that —
-because β is unmeasured, erring conservative is prudent, and the β-sweep shows
-coverage is robust to β while only *spend* scales with it (so a pessimistic β just
-over-states cost). If the true response is more elastic (β ≳ 1), the incentive is
-cheaper than the headline ~0.13%/yr. Related: because demand keys off the *ratio*
-`offered/market`, a **lower market rate makes attraction cheaper** — the 2× bar and
-the spend `(x−1)·m·S` both scale with the market rate `m`.
+which is also exactly **`1/dead_band`** — a clean normalisation that collapses the
+offer to `x = dead_band·(1 + S*)` (offer the threshold scaled by 1 + desired depth),
+with a plausible behavioural reading (the same reluctance that sets a high threshold
+also lowers marginal elasticity). At *small* scale this is the *pessimistic* (less
+elastic, more expensive) side of elasticity ≈ 1; at *billions* scale it is better
+read as a **central** estimate (see [Scaling](#scaling--why-pool-fraction-units)).
+Either way the β-sweep shows coverage is robust to β while only *spend* scales with
+it, so a mis-estimated β moves the price, not feasibility; if the true response is
+more elastic the incentive is cheaper than the headline ~0.13%/yr. Related: because
+demand keys off the *ratio* `offered/market`, a **lower market rate makes attraction
+cheaper** — the 2× bar and the spend `(x−1)·m·S` both scale with the market rate `m`.
 
 We deliberately do **not** add a smoothness/rate-limit penalty: an incentive
 contract can re-rate arbitrarily fast, and the depositor lag (τ≈9 d) already
