@@ -312,52 +312,55 @@ def compare_controllers(grid, P, m, dt_year, ctrls=("pi", "pid"), beta=BETA,
     return sims
 
 
-def sweep_scap(P, m, dt_year, ctrl_name, scaps, beta=BETA, lam=1.0, eval_reserve=0.0):
+def sweep_scap(P, m, dt_year, ctrl_name, scaps, beta=BETA, lam=1.0,
+               eval_reserves=(0.0, 0.10, 0.20)):
     """Re-optimise while raising the offer cap (SCAP): how high an APR burst is
     needed to fill the sharp spike, and how much peak deficit it buys back.
 
-    eval_reserve (e.g. 0.20) is credited only at evaluation as extra capacity on
-    top of the scheme — the controller still covers the full pressure itself."""
+    Each reserve in `eval_reserves` (e.g. 0.10, 0.20) is credited only at
+    evaluation as extra capacity on top of the scheme — the controller still covers
+    the full pressure itself, so coverage doesn't depend on the reserve size. For a
+    peak deficit `d`, the max uncovered with reserve `r` is max(0, d − r); the time
+    uncovered needs the full series, so we compute both here per reserve."""
     names, _, _ = CONTROLLERS[ctrl_name]
     rows = []
     for sc in scaps:
         params, _ = optimize(P, m, dt_year, ctrl_name, lam=lam, beta=beta, scap=sc)
         sim = simulate(P, m, dt_year, ctrl_name, [params[k] for k in names],
                        beta=beta, scap=sc)
-        mt = metrics(P, m, dt_year, sim, lam=lam, eval_reserve=eval_reserve)
+        mt = metrics(P, m, dt_year, sim, lam=lam)
+        deficit = np.clip(P - sim["S"], 0.0, None)
+        mt["res"] = {}   # reserve -> (max_uncovered, frac_time_uncovered)
+        for r in eval_reserves:
+            dres = np.clip(deficit - r, 0.0, None)
+            mt["res"][r] = (float(dres.max()), float(np.mean(dres > 0.01)))
         mt["scap"] = sc
         rows.append(mt)
-        extra = (f"  | w/{eval_reserve*100:.0f}%-reserve: "
-                 f"max_uncov={mt['peak_deficit_res']*100:5.2f}%  "
-                 f"time={mt['frac_uncov_res']*100:.2f}%") if eval_reserve > 0 else ""
-        print(f"  scap={sc:5.1f}  peak_deficit={mt['peak_deficit']*100:5.2f}%  "
-              f"uncovered={mt['frac_uncov']*100:5.2f}% of time  "
-              f"peak_APR={mt['peak_x']:5.1f}x  "
-              f"spend={mt['spend_pa']*100:.4f}%/yr" + extra)
+        cols = "  ".join(f"r{int(r*100):02d}: {mt['res'][r][0]*100:5.2f}%/"
+                         f"{mt['res'][r][1]*100:.2f}%t" for r in eval_reserves)
+        print(f"  scap={sc:5.1f}  peak_APR={mt['peak_x']:5.1f}x  "
+              f"spend={mt['spend_pa']*100:.4f}%/yr  | max_uncov/time @ reserve  {cols}")
     return rows
 
 
-def plot_scap(rows, eval_reserve=0.0, save=None):
+def plot_scap(rows, eval_reserves=(0.0, 0.10, 0.20), save=None):
     import matplotlib
     matplotlib.use("Agg" if save else "QtAgg")
     import matplotlib.pyplot as plt
     px = [r["peak_x"] for r in rows]
+    colors = {0.0: "crimson", 0.10: "darkorange", 0.20: "seagreen"}
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.plot(px, [r["peak_deficit"] * 100 for r in rows], "o-", color="crimson",
-            label="peak deficit, scheme alone [% half-TVL]")
-    ax.plot(px, [r["frac_uncov"] * 100 for r in rows], "s-", color="darkorange",
-            label="time uncovered, scheme alone [%]")
-    if eval_reserve > 0:
-        ax.plot(px, [r["peak_deficit_res"] * 100 for r in rows], "o--", color="darkred",
-                label=f"max uncovered w/ {eval_reserve*100:.0f}% reserve [%]")
-        ax.plot(px, [r["frac_uncov_res"] * 100 for r in rows], "s--", color="saddlebrown",
-                label=f"time uncovered w/ {eval_reserve*100:.0f}% reserve [%]")
+    for rv in eval_reserves:
+        c = colors.get(rv, "gray")
+        lbl = "scheme alone" if rv == 0 else f"+ {rv*100:.0f}% reserve"
+        ax.plot(px, [r["res"][rv][0] * 100 for r in rows], "o-", color=c,
+                label=f"max uncovered, {lbl} [%]")
     ax.set_xlabel("peak offered APR (multiple of market)")
-    ax.set_ylabel("peak deficit [%]  /  time uncovered [%]")
+    ax.set_ylabel("max uncovered net pressure [% half-TVL]")
     ax.set_xscale("log")
     ax.grid(alpha=0.3)
     ax.set_title("High short APR burst fills the spike (scheme covers full pressure, PID)")
-    ax.legend(loc="upper right", fontsize=8)
+    ax.legend(loc="upper right", fontsize=9)
     fig.tight_layout()
     if save:
         fig.savefig(save, dpi=120); print(f"saved {save}")
@@ -496,8 +499,8 @@ def main():
         scaps = [3.0, 5.0, 10.0, 20.0, 40.0, 80.0]
         print(f"sweeping offer cap (scap) for [{args.controller}] controller:")
         rows = sweep_scap(P, m, dt_year, args.controller, scaps,
-                          beta=args.beta, lam=args.lam, eval_reserve=args.eval_reserve)
-        plot_scap(rows, eval_reserve=args.eval_reserve, save=args.save)
+                          beta=args.beta, lam=args.lam)
+        plot_scap(rows, save=args.save)
         return
     if args.optimize:
         params, J = optimize(P, m, dt_year, args.controller, lam=args.lam,
@@ -514,10 +517,13 @@ def main():
     print("params:", dict(zip(names, params)))
 
     sim = simulate(P, m, dt_year, args.controller, params, beta=args.beta, scap=args.scap)
-    mets = metrics(P, m, dt_year, sim, lam=args.lam)
+    mets = metrics(P, m, dt_year, sim, lam=args.lam, eval_reserve=args.eval_reserve)
     print(f"coverage      : {mets['coverage']*100:.2f}%")
     print(f"peak deficit  : {mets['peak_deficit']*100:.2f}% of half-TVL")
     print(f"time uncovered: {mets['frac_uncov']*100:.2f}% (deficit > 1% half-TVL)")
+    if args.eval_reserve > 0:
+        print(f"  w/{args.eval_reserve*100:.0f}% reserve: max uncovered "
+              f"{mets['peak_deficit_res']*100:.2f}%, time {mets['frac_uncov_res']*100:.2f}%")
     print(f"spend         : {mets['spend_pa']*100:.4f}%/yr of half-TVL  (total {mets['spend']:.4g})")
     print(f"offer (x)     : mean {mets['mean_x_active']:.2f}x active, peak {mets['peak_x']:.1f}x "
           f"(active {mets['frac_active']*100:.1f}% of time)")

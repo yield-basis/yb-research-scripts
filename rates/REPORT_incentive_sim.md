@@ -163,25 +163,32 @@ on how big the reserve actually is. Raising the offer cap and re-optimising the 
 
 ![burst fills the spike](pics/incentive_scap_sweep.png)
 
-| peak offered APR | peak deficit, scheme alone | spend %/yr | **max uncovered w/ 20% reserve** | time uncovered w/ reserve |
-|-----------------:|---------------------------:|-----------:|---------------------------------:|--------------------------:|
-| 8×  | 21.3% | 0.114% | 1.30% | ~0% |
-| 12× | 14.7% | 0.119% | **0.00%** | 0% |
-| 22× | 8.4%  | 0.126% | 0.00% | 0% |
-| 34× | 3.8%  | 0.128% | 0.00% | 0% |
+Max uncovered net pressure (% of half-TVL), and time uncovered, for three reserve
+levels credited on top of the scheme:
 
-1. **The scheme alone fills the spike with a burst.** Peak deficit collapses
+| peak offered APR | spend %/yr | 0% reserve (scheme alone) | + 10% reserve | + 20% reserve |
+|-----------------:|-----------:|--------------------------:|--------------:|--------------:|
+| 8×  | 0.114% | 21.3%  (0.68% of time) | 11.3% (0.08%) | 1.3% (~0%) |
+| 12× | 0.119% | 14.7%  (0.43%) | 4.7% (0.01%) | **0.0%** |
+| 22× | 0.126% | 8.4%   (0.23%) | **0.0%** | 0.0% |
+| 34× | 0.128% | 3.8%   (0.22%) | 0.0% | 0.0% |
+
+1. **The scheme alone fills the spike with a burst.** Max uncovered collapses
    21→3.8% as the offer goes 8→34×, while **spend rises only 0.114→0.128%/yr** of
    half-TVL — a high APR paid on a small, briefly-growing sink for a few hours is
    cheap. (Raising the offer cap reduces *scheme-alone* uncovered *time* ~3× for
    ~0.014%/yr extra — the "remarkable" trade.)
-2. **With the 20% reserve as insurance on top, the worst crash is fully covered.**
-   At just **12×** the max net pressure left uncovered over the whole 2.4-year run
-   (incl. 2024-08-05) is **0.0%**; even at 8× it is 1.30% at a single peak hour
-   (~0% of the time). Because the scheme is sized for the full pressure, this does
-   **not** depend on the reserve being exactly 20% — the reserve is pure margin.
-3. **Affordability.** 0.1–0.2%/yr of half-TVL is a price worth paying to make
-   coverage independent of the reserve's size — extra insurance, not a dependency.
+2. **A reserve on top closes the rest, and bigger reserve ⇒ smaller burst needed.**
+   With **20%** the worst crash in the 2.4-year run (incl. 2024-08-05) is fully
+   covered at just **12×** (1.3% at 8×). With **10%** you need ~**22×** to reach
+   full coverage (11.3% / 4.7% left at 8× / 12×). With **0%** the scheme never
+   quite closes the instantaneous tip (3.8% floor at 34×). So the reserve and the
+   burst-height trade off against each other.
+3. **Robust to reserve size.** Because the scheme is sized for the full pressure,
+   coverage degrades *gracefully* as the reserve shrinks (20→10→0%) rather than
+   collapsing — the reserve is margin, not a dependency.
+4. **Affordability.** 0.1–0.2%/yr of half-TVL is a price worth paying to make
+   coverage largely independent of the reserve's size — extra insurance.
 
 Two caveats:
 
