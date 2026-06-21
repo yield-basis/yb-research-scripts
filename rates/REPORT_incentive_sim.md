@@ -25,7 +25,7 @@ Consequences:
   uncovered figures, and the 34× APR ceiling hold identically at $120M or $10B.
   Funding is self-consistent too: spend is a fraction of TVL, and so is the
   YB-earnings (negative-APR) budget that pays for it — they co-scale.
-* **β is scale-invariant *iff* crvUSD supply co-scales with the pools.** β = 0.5
+* **β is scale-invariant if crvUSD supply co-scales with the pools.** β = 0.5
   (= 1/dead_band, giving the tidy `x = dead_band·(1 + S*)`) implicitly assumes the
   responding crvUSD/scrvUSD depth is ~1 half-TVL per unit excess. That holds at
   small scale (the responding market dwarfs a small pool) and is plausible at scale
@@ -36,11 +36,12 @@ Consequences:
 * **Coverage is robust to β; only spend scales with it** (the β-sweep). So a
   mis-estimated β changes the *price*, not feasibility — and the price stays a
   fraction of TVL.
-* **The scale-sensitive assumption is the burst.** Pulling a large *fraction* of a
-  billions-scale pool within hours means moving a huge *absolute* amount of crvUSD
-  fast — exactly where the unmeasured "deposit velocity vs APR" assumption (treat
-  34× as a ceiling, not a promise) is most strained. Pressure-test this before
-  trusting the fast-fill result at scale.
+* **The scale-sensitive assumption is the burst — and it's *behavioural*, not
+  supply.** crvUSD is liquid and can be bought on the open market instantly, so
+  there is no per-hour limit on how much can be acquired (nothing to bridge). The
+  only question is how fast depositors *choose* to move into the sink at a high APR
+  — the τ response, measured only at ~2× steps. Pressure-test that behavioural
+  responsiveness (not crvUSD availability) before trusting the fast-fill at scale.
 
 ## Model
 
@@ -236,19 +237,26 @@ levels credited on top of the scheme:
 4. **Affordability.** 0.1–0.2%/yr of half-TVL is a price worth paying to make
    coverage largely independent of the reserve's size — extra insurance.
 
-Two caveats:
+Three caveats:
 
-* **Linear deposit velocity.** This assumes a 34× offer pulls crvUSD ~17× faster
-  than a 2× offer (`dS/dt ∝ S*`). The measured τ≈9 d was at ~2× steps; the
-  high-APR regime is unmeasured and real depositors likely **saturate** (only so
-  much crvUSD can bridge in an hour). The high-APR end is therefore optimistic —
-  but note even the low end (8×, well inside measured range) is fully covered with
-  the reserve.
+* **Linear deposit velocity (behavioural, not supply).** This assumes a 34× offer
+  pulls deposits ~17× faster than a 2× offer (`dS/dt ∝ S*`). The measured τ≈9 d was
+  at ~2× steps, so the high-APR regime is unmeasured — but the limit is purely how
+  fast people *decide* to move into the sink, **not** crvUSD availability: crvUSD is
+  liquid and can be bought on the open market instantly (nothing to bridge or wait
+  on). Still treat 34× as a ceiling, not a promise; note the low end (8×, inside the
+  measured range) is already fully covered with the reserve.
 * **Fast in, slow out needs stickiness.** The burst fills fast (large `S*−S` gap);
   when pressure clears the reserve drains at τ_out≈4.5 d — gentler than it filled.
   But mercenary capital that came for 34× will also leave fast once the APR drops
   (measured τ_out<τ_in). Genuinely holding and slowly draining the reserve would
   need a **lock-up / vesting** on incentivised deposits, not just incentive timing.
+* **Buy vs mint (open design point).** The mechanism *wants* the incentivised crvUSD
+  to be **bought** on the open market — that pushes crvUSD toward peg and directly
+  relieves the net pressure. If depositors instead **mint** fresh crvUSD to deposit,
+  it raises the borrow rate but doesn't relieve the shortfall the same way, partly
+  defeating the purpose. Steering demand toward buying (e.g. incentivising a
+  crvUSD/pyUSD pool rather than raw scrvUSD deposits) is an open question — TBD.
 
 ## Control structure (block diagram)
 
@@ -304,12 +312,15 @@ all positive net pressure with a worst-case instantaneous shortfall of **3.8% of
 half-TVL**; stacking the existing **20%-of-net-pressure YB-token reserve** on top
 takes the worst-case uncovered net pressure to **0.0%** over the whole period incl.
 the 2024-08-05 crash (a 10% reserve would instead need the burst raised toward ~22×
-to also reach zero). Two caveats to carry into the simulator: the fast fill assumes
-deposit velocity keeps scaling with APR at 34× (unverified above ~2× steps — likely
-optimistic, so treat 34× as a ceiling, not a promise), and mercenary capital that
-arrives for 34× will also leave fast when the bonus ends (`τ_out`), so to drain the
-reserve slowly rather than whipsaw you'd add a lock-up/vesting on incentivised
-deposits.
+to also reach zero). Caveats to carry into the simulator: the fast fill assumes
+deposit velocity keeps scaling with APR at 34× (unverified above ~2× steps — a
+*behavioural* question of how fast people decide, since crvUSD itself is liquid and
+instantly buyable, nothing to bridge; treat 34× as a ceiling, not a promise);
+mercenary capital that arrives for 34× will also leave fast when the bonus ends
+(`τ_out`), so to drain the reserve slowly you'd add a lock-up/vesting; and the
+scheme assumes the crvUSD is **bought** (relieves the peg) rather than **minted**
+(raises borrow rate but doesn't, so steering demand to a buy venue like a
+crvUSD/pyUSD pool is an open point).
 
 | symbol | value | role |
 |--------|-------|------|
