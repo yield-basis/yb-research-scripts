@@ -250,6 +250,24 @@ Two caveats:
   (measured τ_out<τ_in). Genuinely holding and slowly draining the reserve would
   need a **lock-up / vesting** on incentivised deposits, not just incentive timing.
 
+## Control structure (block diagram)
+
+The controller is a PID-with-feed-forward in the classic control-loop sense, with
+the depositor dynamics as the plant:
+
+![block diagram](pics/incentive_block_diagram.png)
+
+Reading it left to right: the net pressure `P` is the **reference**; the realised
+sink `S` is the **plant output**, fed back to form the error `e = P − S`. Four
+parallel paths set the target sink `S*` — `Kp` and `Ki/s` act on the error, while
+the feed-forward `α` and the derivative `Kd·s` (rising pressure only) act on `P`
+directly (derivative-on-reference, to pre-empt a sharp move without derivative
+kick). `S*` is clamped, mapped to an offered APR multiple `x = 2 + S*/β` (capped at
+34×), and multiplied by the market norm `m` to give the **bonus APR** — the
+actuator. The **plant** `1/(τs+1)` is the depositor response (asymmetric τ_in/τ_out).
+Side taps give the spend `(x−1)·m·S` and the coverage check against `P` (with the
+20% YB reserve). Drawn by `plot_block_diagram.py`.
+
 ## Implementation spec (34× peak-APR design)
 
 For someone wiring this into a combined pool+sink simulator or a smart contract.
@@ -315,6 +333,8 @@ Reproduce the gains: `uv run python incentive_sim.py --controller pid --optimize
   reserve credited as extra insurance (`--eval-reserve`).
 * `smooth_aave.py` — exports the 7-day-EMA Aave norm to `aave_rate_smoothed.csv.xz`
   (lzma/LFS; raw + `aave_apr_ema7d`).
+* `plot_block_diagram.py` — renders the control block diagram to
+  `pics/incentive_block_diagram.png`.
 
 ```sh
 # no-buffer mechanics (scheme handles all pressure)
