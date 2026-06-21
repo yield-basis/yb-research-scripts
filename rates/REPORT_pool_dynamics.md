@@ -39,8 +39,10 @@ is reward *value* moving the equilibrium, independent of the emission rate.
 
 `YB_LM_value` is the **Votemarket Liquidity-Mining YB paid directly to LPs** (via
 Merkl), which the gauge `reward_data(YB)` does *not* see — exact per-epoch amounts
-(`VOTEMARKET_LM_YB`): **331,533 YB (Apr 9–16)** and **331,874 YB (Apr 16–23) 2026**,
-annualised at the contemporaneous YB price. See the incentive section below.
+(`VOTEMARKET_LM_YB`): **331,533 YB** and **331,874 YB**, annualised at the
+contemporaneous YB price. The campaign's stated dates are the *voting* windows
+(Apr 9–16, Apr 16–23); **LP rewards are distributed one week later**, so the active
+reward epochs are **Apr 16–23** and **Apr 23–30 2026**. See the incentive section.
 
 **No boost term.** CRV emissions to the gauge are a fixed total split among stakers
 by veCRV-boosted weight — boost only *redistributes* that fixed pot (one staker's
@@ -57,13 +59,14 @@ Optimised against log-TVL (one ODE, whole series):
 | quantity | value |
 |----------|-------|
 | **τ_in** (base inflow) | **30 d** (rail; see note) |
-| **τ_out** (outflow) | **7.2 d** |
-| **p_in** (tiny-pool rush) | **0.80** |
-| **dead band** (equilibrium) | **[1.50×, 2.11×] market** |
-| R² (log-TVL) | **0.956** |
+| **τ_out** (outflow) | **6.1 d** |
+| **p_in** (tiny-pool rush) | **0.83** |
+| **dead band** (equilibrium) | **[1.50×, 2.04×] market** |
+| R² (log-TVL) | **0.975** |
 
-(R² progression: 0.921 plain → 0.931 with the tiny-pool rush → **0.956** once the
-Votemarket LM YB is added.)
+(R² progression: 0.921 plain → 0.931 with the tiny-pool rush → 0.956 with the
+Votemarket LM YB → **0.975** once the LP-reward epochs are shifted +1 week off the
+voting window.)
 
 * **Equilibrium rate:** capital flows until the (endogenous) APR is driven down to
   the top edge (~2.2× sUSDS) and bleeds out until it climbs to the bottom edge
@@ -88,12 +91,14 @@ and the gauge read caught *neither* directly:
 token pYB (bridged YB), **800,000 YB over two weekly epochs**, hook =
 `IncentiveGaugeHook`. Of the 800k:
 
-* **~663k YB went directly to LPs** as Liquidity Mining — **331,533 YB (Apr 9–16)**
-  + **331,874 YB (Apr 16–23)** — bridged via the hook to **Merkl** and distributed
-  to pyUSD LPs. (Exact figures from StakeDAO/Votemarket data; they sum to the
-  663,418 YB the `IncentiveGaugeHook` claimed on-chain.) This is `YB_LM_value`, now
-  added to the model — and it is what lifts R² from 0.931 to **0.956**, holding the
-  April–May plateau up that the model previously bled off.
+* **~663k YB went directly to LPs** as Liquidity Mining — **331,533 + 331,874 YB** —
+  bridged via the hook to **Merkl** and distributed to pyUSD LPs. (Exact figures
+  from StakeDAO/Votemarket data; they sum to the 663,418 YB the `IncentiveGaugeHook`
+  claimed on-chain.) The quoted dates are *voting* windows (Apr 9–16, Apr 16–23);
+  LP rewards land **one week later**, so the active epochs are **Apr 16–23** and
+  **Apr 23–30**. This is `YB_LM_value`, now added to the model — lifting R² to
+  **0.956**, and to **0.975** once the +1-week reward shift is applied, holding up
+  the April–May plateau the model previously bled off.
 * **~137k YB went to veCRV voters** (vote-buying), which raised the gauge's relative
   weight → more CRV emissions — already in the model via `crv_rel_weight`, which
   spikes **8.6×** for exactly the campaign window:

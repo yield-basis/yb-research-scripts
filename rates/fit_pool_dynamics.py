@@ -47,11 +47,13 @@ YEAR = 365.0 * 86400.0
 
 # Votemarket Liquidity-Mining YB distributed to pyUSD LPs via Merkl (the campaign
 # `leftover` swept to the IncentiveGaugeHook → bridged → Merkl). NOT in the gauge
-# `reward_data(YB)`, so the model misses it unless added here. Exact YB per weekly
-# epoch, from StakeDAO/Votemarket campaign data (campaign 1435).
+# `reward_data(YB)`, so the model misses it unless added here. Exact YB per epoch
+# from StakeDAO/Votemarket campaign data (campaign 1435). NOTE: the campaign dates
+# are the *voting* windows; LP rewards are distributed **one week later**, so these
+# periods are the voting window + 1 week.
 VOTEMARKET_LM_YB = [
-    ("2026-04-09", "2026-04-16", 331_533.0),
-    ("2026-04-16", "2026-04-23", 331_874.0),
+    ("2026-04-16", "2026-04-23", 331_533.0),   # voting Apr 9–16
+    ("2026-04-23", "2026-04-30", 331_874.0),   # voting Apr 16–23
 ]
 
 
