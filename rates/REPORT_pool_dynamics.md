@@ -14,7 +14,7 @@ The LP APR is **endogenous** — it is `reward_rate / TVL`, so as TVL grows the 
 self-limits. State `L` = staked TVL ($); driver = the real reward series:
 
 ```
-rewards(t)   = CRV_value(t) + YB_value(t)                 [$/yr]
+rewards(t)   = CRV_value(t) + YB_value(t) + YB_LM_value(t) [$/yr]
 APR a(t,L)   = fee_apr(t) + rewards / L
 x            = a / m(t)            m = sUSDS market rate
 dead band [x_lo, x_hi]:
@@ -37,6 +37,11 @@ from `pool_apr.csv.xz`. **Prices are per-block, not constant** — over the wind
 CRV ranges 4.5× ($0.18–0.79) and YB **9.2×** ($0.08–0.71), so much of the dynamics
 is reward *value* moving the equilibrium, independent of the emission rate.
 
+`YB_LM_value` is the **Votemarket Liquidity-Mining YB paid directly to LPs** (via
+Merkl), which the gauge `reward_data(YB)` does *not* see — exact per-epoch amounts
+(`VOTEMARKET_LM_YB`): **331,533 YB (Apr 9–16)** and **331,874 YB (Apr 16–23) 2026**,
+annualised at the contemporaneous YB price. See the incentive section below.
+
 **No boost term.** CRV emissions to the gauge are a fixed total split among stakers
 by veCRV-boosted weight — boost only *redistributes* that fixed pot (one staker's
 gain is another's loss), so the **average** CRV APR is exactly `CRV_value / TVL`
@@ -52,10 +57,13 @@ Optimised against log-TVL (one ODE, whole series):
 | quantity | value |
 |----------|-------|
 | **τ_in** (base inflow) | **30 d** (rail; see note) |
-| **τ_out** (outflow) | **8.2 d** |
-| **p_in** (tiny-pool rush) | **0.78** |
-| **dead band** (equilibrium) | **[1.50×, 2.16×] market** |
-| R² (log-TVL) | **0.931** (vs 0.921 without the rush) |
+| **τ_out** (outflow) | **7.2 d** |
+| **p_in** (tiny-pool rush) | **0.80** |
+| **dead band** (equilibrium) | **[1.50×, 2.11×] market** |
+| R² (log-TVL) | **0.956** |
+
+(R² progression: 0.921 plain → 0.931 with the tiny-pool rush → **0.956** once the
+Votemarket LM YB is added.)
 
 * **Equilibrium rate:** capital flows until the (endogenous) APR is driven down to
   the top edge (~2.2× sUSDS) and bleeds out until it climbs to the bottom edge
@@ -70,38 +78,39 @@ Optimised against log-TVL (one ODE, whole series):
 * The earlier per-campaign fits (τ_in ~9–11 d) measured an effective inflow during
   high-APR campaigns — consistent with the rush regime here, not the slow base τ_in.
 
-## Incentive accounting — two things that look missing but aren't
+## Incentive accounting — the April Votemarket campaign (two channels)
 
-The model reads the **Curve gauge** `reward_data(YB)` only, so any YB paid through
-other venues could be missing. Two were investigated:
+The model reads the **Curve gauge** `reward_data(YB)` only, so YB paid through other
+venues can be missing. The April 2026 campaign paid LPs through **two** channels,
+and the gauge read caught *neither* directly:
 
-### 1. End-April 2026 — a Votemarket campaign that went to *voters*, not LPs
+**Votemarket v2 campaign 1435** (Arbitrum platform `0x8c2c5A…`), pyUSD gauge, reward
+token pYB (bridged YB), **800,000 YB over two weekly epochs**, hook =
+`IncentiveGaugeHook`. Of the 800k:
 
-A YB campaign ran Apr 16–30 2026; our gauge `reward_data(YB)` ends Apr 16, so it
-looked missing. Tracing it: **Votemarket v2 campaign 1435** (Arbitrum platform
-`0x8c2c5A…`), pyUSD gauge, reward token pYB (bridged YB), **800,000 YB over two
-weekly periods**, hook = `IncentiveGaugeHook`.
+* **~663k YB went directly to LPs** as Liquidity Mining — **331,533 YB (Apr 9–16)**
+  + **331,874 YB (Apr 16–23)** — bridged via the hook to **Merkl** and distributed
+  to pyUSD LPs. (Exact figures from StakeDAO/Votemarket data; they sum to the
+  663,418 YB the `IncentiveGaugeHook` claimed on-chain.) This is `YB_LM_value`, now
+  added to the model — and it is what lifts R² from 0.931 to **0.956**, holding the
+  April–May plateau up that the model previously bled off.
+* **~137k YB went to veCRV voters** (vote-buying), which raised the gauge's relative
+  weight → more CRV emissions — already in the model via `crv_rel_weight`, which
+  spikes **8.6×** for exactly the campaign window:
 
-Reading the hook source settles where the YB went: it bridges only the campaign
-**`leftover`** (unspent vote-incentive) to **Merkl** for LP distribution. For
-campaign 1435 the **`leftover` is 0** both periods (`totalDistributed` ≈ 800k), so
-**~0 YB reached LPs directly — the entire 800k was a vote-incentive paid to veCRV
-voters.**
+  | window | crv_rel_weight |
+  |--------|----------------|
+  | Mar 20 – Apr 16 | 0.257% |
+  | **Apr 16 – Apr 30** | **2.225%** |
+  | Apr 30 – May 15 | 0.254% |
 
-That is *not* missing from the model, because vote-buying raised the gauge's
-relative weight → more CRV emissions, which we already read per block. The proof is
-in `crv_rel_weight`, which spikes **8.6×** for exactly the campaign window:
+> **Correction.** An earlier pass read the campaign's per-epoch `leftover` field as
+> 0 and concluded "all 800k went to voters." That field is **zeroed once swept to
+> the hook**, so it understated the LP share — the hook's claimed total (663k, above)
+> is the truth. The cross-chain forensics (`trace_votemarket_lp.py`) had pointed the
+> right way (the hook = LP path); the authoritative per-epoch amounts settle it.
 
-| window | crv_rel_weight |
-|--------|----------------|
-| Mar 20 – Apr 16 | 0.257% |
-| **Apr 16 – Apr 30** | **2.225%** |
-| Apr 30 – May 15 | 0.254% |
-
-So the end-April incentive enters the model as the CRV boost, not as a YB-to-LP
-stream — nothing to add.
-
-### 2. November 2025 — a tiny direct StakeDAO reward
+## A tiny November 2025 StakeDAO reward
 
 The StakeDAO pyUSD RewardVault (`0x0F67…`) `reward_data(YB)` shows a single 7-day
 campaign: **2,527.6 YB + 1.5 CVX**, deposited **2025-11-03** by StakeDAO's
@@ -116,8 +125,9 @@ negligible for the dynamics.
 * `trace_yb_recipients.py` — aggregate YB Transfer recipients over a block window
   (node RPC, `fetch_multi`-batched `getLogs`, tqdm).
 * `trace_votemarket_lp.py` — split a Votemarket campaign into voter vs LP shares by
-  cross-checking claimers' veCRV votes (kept for reference; superseded by reading
-  the `IncentiveGaugeHook` source, which gives the answer directly via `leftover`).
+  cross-checking claimers' veCRV votes; it correctly flagged the `IncentiveGaugeHook`
+  as the LP path (the on-chain `leftover` field is zeroed once swept and was
+  misleading). Final per-epoch LP amounts came from StakeDAO/Votemarket campaign data.
 
 ```sh
 uv run python fit_pool_dynamics.py --save pics/pool_dynamics_fit.png

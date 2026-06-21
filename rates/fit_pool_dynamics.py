@@ -33,6 +33,7 @@ Usage
     uv run python fit_pool_dynamics.py --save pics/pool_dynamics_fit.png
 """
 import argparse
+import datetime as dt
 import lzma
 from pathlib import Path
 
@@ -43,6 +44,19 @@ HERE = Path(__file__).resolve().parent
 APR_CSV = HERE / "pool_apr.csv.xz"
 SUSDS_CSV = HERE / "susds_rates.csv.xz"
 YEAR = 365.0 * 86400.0
+
+# Votemarket Liquidity-Mining YB distributed to pyUSD LPs via Merkl (the campaign
+# `leftover` swept to the IncentiveGaugeHook → bridged → Merkl). NOT in the gauge
+# `reward_data(YB)`, so the model misses it unless added here. Exact YB per weekly
+# epoch, from StakeDAO/Votemarket campaign data (campaign 1435).
+VOTEMARKET_LM_YB = [
+    ("2026-04-09", "2026-04-16", 331_533.0),
+    ("2026-04-16", "2026-04-23", 331_874.0),
+]
+
+
+def _ts(s):
+    return int(dt.datetime.fromisoformat(s).replace(tzinfo=dt.UTC).timestamp())
 
 
 def trailing_apr(ts, x, win_days=14.0):
@@ -69,15 +83,26 @@ def load_series():
     crv_val = g("crv_rate") * g("crv_rel_weight") * g("crv_price") * YEAR   # $/yr
     yb_on = t < g("yb_period_finish")
     yb_val = np.where(yb_on, g("yb_rate") * g("yb_price") * YEAR, 0.0)      # $/yr
+    # Votemarket LM YB to LPs (annualised $/yr over each weekly epoch, contemporaneous price)
+    ybpx = g("yb_price")
+    yb_lm_val = np.zeros(t.size)
+    lm_on = np.zeros(t.size, bool)
+    for s0, e0, amt in VOTEMARKET_LM_YB:
+        a, b = _ts(s0), _ts(e0)
+        seg = (t >= a) & (t < b)
+        yb_lm_val[seg] = amt * ybpx[seg] * YEAR / (b - a)
+        lm_on |= seg
     with lzma.open(SUSDS_CSV) as fh:
         s = pl.read_csv(fh.read())
     st, sa = s["timestamp"].to_numpy(), s["susds_apr"].to_numpy()
     m = np.interp(t, st, sa)                            # market rate (fraction)
-    return dict(t=t, L=L, fee=fee, crv_val=crv_val, yb_val=yb_val, m=m, yb_on=yb_on)
+    return dict(t=t, L=L, fee=fee, crv_val=crv_val, yb_val=yb_val, yb_lm_val=yb_lm_val,
+                m=m, yb_on=yb_on | lm_on)
 
 
 def simulate(S, tau_in_d, tau_out_d, x_lo, x_hi, p_in=0.0):
     t, fee, crv_val, yb_val, m = S["t"], S["fee"], S["crv_val"], S["yb_val"], S["m"]
+    yb_lm_val = S["yb_lm_val"]
     tau_in, tau_out = tau_in_d / 365.0, tau_out_d / 365.0
     n = t.size
     L = np.empty(n)
@@ -85,7 +110,7 @@ def simulate(S, tau_in_d, tau_out_d, x_lo, x_hi, p_in=0.0):
     a = np.empty(n)
     for k in range(1, n):
         Lk = L[k - 1]
-        rewards = crv_val[k] + yb_val[k]            # CRV/TVL already averages out boost
+        rewards = crv_val[k] + yb_val[k] + yb_lm_val[k]   # CRV/TVL already averages out boost
         apr = fee[k] + rewards / Lk
         a[k] = apr
         x = apr / m[k]
@@ -103,7 +128,7 @@ def simulate(S, tau_in_d, tau_out_d, x_lo, x_hi, p_in=0.0):
             Lk = Lk + (Lt - Lk) * (dt / tau_out)
         # else: hold
         L[k] = max(Lk, 1e3)
-    a[0] = fee[0] + (crv_val[0] + yb_val[0]) / L[0]
+    a[0] = fee[0] + (crv_val[0] + yb_val[0] + yb_lm_val[0]) / L[0]
     return L, a
 
 
