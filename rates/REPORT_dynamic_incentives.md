@@ -25,40 +25,16 @@ The net pressure can be made nonpositive 99% of the times via dynamically changi
 
 ## 2. Market rates and risks
 
-To know how high a bonus APR must go, we first measure the rates depositors compare
-against and the **risk premia** between crvUSD venues and plain money-market lending
-(`REPORT_market_rates.md`). 1000 time-spaced samples, one Multicall3 per block,
-2025-10 → 2026-06.
-
-![market rates](pics/market_rates.png)
-
-| series | median APR | dispersion |
-|--------|-----------:|------------|
-| LlamaLend WBTC borrow | 3.73% | very volatile (IQR 1.2–10.8%, spikes ~140%) |
-| scrvUSD savings | 3.60% | moderate (IQR 1.4–6.3%) |
-| Aave v3 USDC supply | 3.37% | steady (IQR 2.5–3.8%) |
-| Sky sUSDS savings | 4.40% | governance step rate |
-
-**Two layers of risk premium matter:**
+To know how high a bonus APR must go, we first measure the rates depositors compare against and the **risk premia** between crvUSD venues and plain money-market lending (`REPORT_market_rates.md`). Two layers of risk premium matter:
 
 * **Savings-rate premium (mild, ~1%).** Over its full life scrvUSD pays a median
-  **+1.0–1.3%** over Aave USDC (on top ~62% of the time) — the premium depositors demand
-  to hold crvUSD over USDC. Against **sUSDS** the spread is **~0** (median +0.03%): Sky
-  already prices ~1% above plain USDC, so scrvUSD ≈ sUSDS ≈ "Aave + 1%" all sit at a
-  comparable level. The premium is *not constant* — it compresses to ~+0.2% in quiet
-  periods.
+  **+1.0–1.3%** over Aave USDC (on top ~62% of the time) — the premium depositors demand to hold crvUSD over USDC. Against **sUSDS** the spread is **~0** (median +0.03%): Sky already prices ~1% above plain USDC, so scrvUSD ≈ sUSDS ≈ "Aave + 1%" all sit at a comparable level. The premium is *not constant* — it compresses to ~+0.2% in quiet periods.
 
   ![crvUSD risk premium](pics/crvusd_premium.png)
 
-* **Pool-LP premium (large, ~2×).** Providing *liquidity* in a crvUSD pool carries more
-  risk (and more mercenary friction) than a savings deposit. The unified pool fit (§5)
-  finds LPs sit in equilibrium only when the pool pays **~2.1× the market savings rate** —
-  i.e. the incentive has to clear a **~2× hysteresis** before crvUSD moves at all. This
-  ~2× threshold, not the ~1% savings premium, is the number that sets incentive cost.
+* **Pool LPs** start depositing when the APR is higher than **~2×** of the market rate, and start withdrawing when the APR is below **1×-1.5×** of the market rate. So liquidity provision is more risky and more expensive. Yet, we might prefer it to prevent people from just borrowing crvUSD to farm (purchasing it is what stabilizes the peg).
 
-The market norm used by the controller is **Aave USDC** for the net-pressure backtest
-(the only series spanning the 2024-08-05 crash), 7-day-EMA-smoothed because it is spiky;
-the pool-dynamics calibration uses **sUSDS**. All three savings rates agree to ~1%.
+The market norm used by the controller is **Aave USDC** for the net-pressure backtest (the only series spanning the 2024-08-05 crash), 7-day-EMA-smoothed because it is spiky; the pool-dynamics calibration uses **sUSDS**. All three savings rates agree to ~1%.
 
 ---
 
