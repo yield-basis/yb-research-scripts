@@ -57,13 +57,16 @@ spike (663k YB to LPs)** and the green Oct/Feb on-gauge YB are explicit.
   if it were rotation this would be strongly negative.
 * **Aggregate and incentives bump together.** When YB incentivises pyUSD (April), both
   pyUSD **and** the aggregate staked TVL rise. New crvUSD shows up; it isn't reshuffled.
-* **The slow "others" decline tracks *their own* fading CRV, not pyUSD draining them.**
-  The non-pyUSD LP incentive is essentially **all CRV** (on-gauge YB ≈ 0; their pYB
-  was a voter bribe, not an LP reward). It falls from **~$12M/yr (Nov-2025) to ~$5M/yr
-  (mid-2026)** as the CRV price roughly halved ($0.68→~$0.22), and the others' TVL
-  ($146M→$70M) falls with it. Other pools shrank because *their own* CRV faded as
-  crypto prices fell — which is exactly why YB stepped in to incentivise pyUSD over
-  Feb–May.
+* **The slow "others" decline is mostly *their own* fading CRV — plus a sustained
+  competition effect.** The non-pyUSD LP incentive is essentially **all CRV** (on-gauge
+  YB ≈ 0; their pYB was a voter bribe, not an LP reward). It falls from **~$12M/yr
+  (Nov-2025) to ~$5M/yr (mid-2026)** as the CRV price roughly halved ($0.68→~$0.22), and
+  the others' TVL ($146M→$70M) falls roughly in proportion (TVL ∝ reward pot). On top of
+  that, a dead-band fit of the others (`REPORT_others_dynamics.md`) finds they bled
+  ~2× faster *while pyUSD was being incentivised* than their incentive drop alone
+  explains — a **sustained** competition effect (over the campaign, **not** at the
+  rush). So: the rush brings new liquidity (no rotation), but the incentives do compete
+  on the slower timescale.
 
 ## Conclusion
 
