@@ -38,7 +38,8 @@ CRV ranges 4.5× ($0.18–0.79) and YB **9.2×** ($0.08–0.71), so much of the 
 is reward *value* moving the equilibrium, independent of the emission rate.
 
 `YB_LM_value` is the **Votemarket Liquidity-Mining YB paid directly to LPs** (via
-Merkl), which the gauge `reward_data(YB)` does *not* see — exact per-epoch amounts
+StakeDAO/Votemarket — bridged pYB to a RewardVault; there were never Merkl
+campaigns), which the gauge `reward_data(YB)` does *not* see — exact per-epoch amounts
 (`VOTEMARKET_LM_YB`): **331,533 YB** and **331,874 YB**, annualised at the
 contemporaneous YB price. The campaign's stated dates are the *voting* windows
 (Apr 9–16, Apr 16–23); **LP rewards are distributed one week later**, so the active
@@ -98,7 +99,8 @@ token pYB (bridged YB), **800,000 YB over two weekly epochs**, hook =
 `IncentiveGaugeHook`. Of the 800k:
 
 * **~663k YB went directly to LPs** as Liquidity Mining — **331,533 + 331,874 YB** —
-  bridged via the hook to **Merkl** and distributed to pyUSD LPs. (Exact figures
+  bridged via the hook (pYB) into the StakeDAO/Votemarket **RewardVault** for pyUSD
+  LPs (there were never Merkl campaigns). (Exact figures
   from StakeDAO/Votemarket data; they sum to the 663,418 YB the `IncentiveGaugeHook`
   claimed on-chain.) The quoted dates are *voting* windows (Apr 9–16, Apr 16–23);
   LP rewards land **one week later**, so the active epochs are **Apr 16–23** and

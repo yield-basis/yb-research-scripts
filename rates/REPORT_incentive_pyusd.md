@@ -61,6 +61,10 @@ Optimised PID at a 22× cap (full pressure, β = 0.5):
 
 ## Caveats
 
+* **The rush is real new liquidity, not pool-rotation** — validated against the
+  aggregate of all crvUSD stable pools (`REPORT_crvusd_aggregate.md`): during pyUSD
+  rush-ins other crvUSD pools do *not* drain (rush-time corr +0.06), and aggregate
+  TVL rises with the incentive. So relying on the rush is justified.
 * The pyUSD depositors are a *different* base than scrvUSD's, but they're the best
   on-chain calibration of "how DeFi LPs chase incentive APR," and the dead-band /
   rush shape should transfer better than the earlier guesses.
