@@ -1,42 +1,25 @@
 # Dynamic incentives for stabilizing crvUSD and unlocking scaling of Yield Basis
-
-*A synthesis of the measurement and simulation work. Each section links the figures and
-the underlying detailed reports; section 9 collects the measured coefficients.*
-
 ---
 
 ## 1. Summary
 
-Yield Basis (YB) runs a leveraged BTC AMM whose debt is denominated in **crvUSD**. When
-the market gaps, the AMM transiently holds more crvUSD debt than the pool's crvUSD
-balance — a **net pressure** that, left alone, pushes crvUSD off peg. The proposal is to
-neutralise that pressure with a **dynamic incentive**: a controller that briefly pays a
-bonus APR on a crvUSD venue (scrvUSD, or a crvUSD pool), pulling crvUSD into a supply
-sink exactly when and as much as needed, then standing down.
+Yield Basis (YB) runs an AMM with leveraged BTC/crvUSD (or WETH/crvUSD) liquidity whose debt is denominated in **crvUSD**. When the market drops too quickly, the AMM transiently holds more crvUSD debt than the pool's crvUSD balance — a **net pressure** that, left alone, pushes crvUSD off peg. The proposal is to neutralise that pressure with a **dynamic incentive** that briefly pays a bonus APR on a crvUSD venue (scrvUSD, or a crvUSD pool), pulling crvUSD into a supply sink exactly when and as much as needed, and reducing it back when the supply sink is not needed anymore.
 
-**The problem is spiky but slow enough to chase.** Net pressure is sharply peaked at ~0
-with fat tails: 99% of the time below 14% of a half-deposit, but reaching **+55%** in the
-2024-08-05 crash, where it stayed **>20% for ~3 days** and **>40% for ~10 h**
-(`REPORT_net_pressure.md`).
+**Net pressure** (`(debt - crvusd_in_pool) / yb_pool_size`) is at 0 most of the time (evidenced by a sharp peak in distribution of pressures) with fat tails in the distribution: 99% of the time below 14% of `yb_pool_size = curve_pool_size / 2`, but reaching **+55%** in the 2024-08-05 crash, where it stayed **>20% for ~3 days** and **>40% for ~10 h** (`REPORT_net_pressure.md`). In our definition, positive net pressure is bad (we should try to eliminate it), and negative net pressure is good (handled by crvUSD PegKeepers).
 
 ![net pressure distribution](pics/net_pressure_hist.png)
 
-**Headline results.**
+### Headline result
 
-* The depositor response is a **dead-band relaxation**: crvUSD only moves once a venue
-  pays ~**2× the market savings rate**, then fills with a ~**5–11 day** time constant and
-  drains a touch faster — *measured*, not assumed (§3–5).
-* A **PID-with-feed-forward** controller covers **~99% of all positive net pressure** —
-  including the worst crash in a 2.4-year backtest — for **~0.15%/yr of half-TVL**, fully
-  closed with the existing 20% YB-token reserve (§7–8).
-* Incentivising a crvUSD pool **cannibalises ~44%** of its new TVL from *other* crvUSD
-  pools, so its net new-liquidity efficiency is **~56%** — but that leakage is **slow**;
-  the **fast "rush" inflow is ~100% new crvUSD** (§6). Because net pressure is spiky and
-  the controller rides the clean rush, the real cost penalty from leakage is only **~22%**
-  (×1.22), not the naive ×1.8 (§8).
-* Everything is in **fractions of half-TVL**, so the spend, coverage and APR ceilings are
-  **scale-free** — they hold identically at today's ~$120M and at billions, which is what
-  makes this a scaling lever rather than a fixed subsidy.
+The net pressure can be made nonpositive 99% of the times via dynamically changing incentives given to crvUSD supply sinks (I chose pyUSD/crvUSD pool for this). For that, the pressure should be handled by a [PID controller](https://en.wikipedia.org/wiki/PID_controller). Having some persistent deposits in crvUSD supply sinks (incentivized by YB tokens) at the level of 10-20% of Yield Basis TVL *eliminates the net pressure entirely*. This allows for unbounded scaling of Yield Basis.
+
+#### Key findings which were important in this research:
+
+* Risk premium of scrvUSD is only 1% higher than USDC on Aave, or same as Sky Savings (sUSDS). This means that supply sink is rather inexpensive on average (§2).
+* The depositor response is a **dead-band relaxation**: crvUSD only moves once a venue pays ~**2× the market savings rate**, then fills with a ~**5–11 day** time constant and drains a bit faster, according to our measurements (§3–5).
+* When fresh large incentives are given - the inflow rate is *very high*. We call it **rush inflow** and model it as well.
+* Incentivising a crvUSD pool **cannibalises ~44%** of its new TVL from *other* crvUSD pools, so its net new-liquidity efficiency is **~56%** — but that leakage is **slow**. Fortunately, this does not affect the rush inflow (§6). So combining these two effects leads to having to spend ×1.22 more incentives than without cannibalasing incentives of peer pools.
+* A **PID-with-feed-forward** controller covers **~99% of all positive net pressure** — including the worst crash in a 2.4-year backtest — for **~0.15%/yr of Yield Basis TVL**, fully closed with the existing 10-20% YB-token reserve (§7–8).
 
 ---
 
