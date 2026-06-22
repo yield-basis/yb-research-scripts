@@ -44,8 +44,11 @@ no leakage — a modest ~22% premium, fully covered with the 20% YB reserve.
 
 ## Caveats
 
-* This credits the rush as 100% new, per the aggregate finding. If some of even the
-  rush were rotation, the true cost sits between rush-clean (×1.22) and flat (×2.28).
+* This credits the rush as 100% new — now directly verified (`REPORT_rush_migration.md`):
+  at the rush, over ≤1 day the all-pool aggregate rises ~1:1 with pyUSD (Δagg/Δpy = 0.99
+  at 24 h) and the peers stay flat (−0.01), with only a small sub-hour transient. If some
+  of even the rush were rotation the true cost would sit between rush-clean (×1.22) and
+  flat (×2.28), but the data puts it at the rush-clean end.
 * The 56% slow-channel efficiency is the measured pyUSD aggregate (`k ≈ 44%`), with the
   uncertainty noted in `REPORT_incentive_efficiency.md` (the peers' dead-band model is
   noisy, biasing `k` somewhat high — i.e. real leakage may be *less*, making the sink
