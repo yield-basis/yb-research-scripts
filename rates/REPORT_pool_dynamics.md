@@ -120,6 +120,38 @@ exactly on `1 + W₀(−e^{−T})`, tracking the `√(2t/τ_in)` rush asymptote 
 [1.52, 1.60]× — a different point in the same flat valley; only the curve and the overall
 responsiveness are pinned, not the individual edges/τ.)
 
+## Alternative mechanisms tested (depositor heterogeneity)
+
+The rush and the dead band can each be given a "population" microfoundation — a
+distribution of users rather than one representative LP. Three were checked:
+
+* **Spread in κ (responsiveness).** Invisible. The flow is linear in κ, so
+  `∫κ·(x−x_hi)·ρ(κ)dκ = ⟨κ⟩·(x−x_hi)` — only the *mean* enters; any distribution with
+  the same mean is identical. The fitted κ already *is* the population mean.
+* **Spread in the activation threshold `x_hi`.** Produces curvature: the aggregate flow
+  `∝ ∫_{θ<x}(x−θ)ρ(θ)dθ` is convex in `x`, which is exactly a microfoundation for a
+  super-linear rush (`p_in > 1`). Degenerate with `p_in` (the flat `p_in` valley), so not
+  separately identifiable.
+* **Spread in τ (a spectrum of depositor speeds), the "rich" multi-timescale case**
+  (`fit_pool_dynamics_spectrum.py`): each speed-class has its own capital `w(τ)` and own
+  fill, giving a true superposition of exponentials `L(t)=∫g(τ)(1−e^{−t/τ})dτ`. Fitting a
+  one-parameter log-normal spectrum (σ→0 = single τ):
+
+  ![multi-timescale spectrum fit](pics/pool_dynamics_spectrum_fit.png)
+
+  **R² 0.971** with a *narrow* spread (σ≈0.46, capital at τ≈2.5–8 d) — barely above
+  single-τ-no-rush (0.970) and **below** the rush exponent (0.974). It is the one variant
+  the data mildly *dis*-favours: a spectrum has *fixed* speeds, but the rush is
+  **state-dependent** (fill rate grows with how far APR sits above the band), and at the
+  onset APR hit ~60× market — faster than any fixed bucket (the zoom shows the spectrum
+  lagging the sharpest rise). So the rush is "deposit speed grows with APR attractiveness,"
+  not "a fixed spectrum of depositor speeds."
+
+In short: only the **aggregate responsiveness** and the **dead band** are identifiable;
+the internal decomposition (κ-spread, threshold-spread/`p_in`, τ-spread/`L_market`) lives
+in flat valleys — except that the fixed-τ spectrum is a measurably (if marginally) weaker
+account of the rush than the APR-dependent term.
+
 ## Incentive accounting — the April Votemarket campaign (two channels)
 
 The model reads the **Curve gauge** `reward_data(YB)` only, so YB paid through other
@@ -169,6 +201,8 @@ negligible for the dynamics.
   band; default fits all four parameters).
 * `fit_pool_dynamics_simple.py` — the analytically solvable simplification (fee = 0,
   p_in = 1), with the Lambert-W closed-form check.
+* `fit_pool_dynamics_spectrum.py` — the "rich" multi-timescale variant (a fitted
+  log-normal spectrum of depositor time constants).
 * `trace_yb_recipients.py` — aggregate YB Transfer recipients over a block window
   (node RPC, `fetch_multi`-batched `getLogs`, tqdm).
 * `trace_votemarket_lp.py` — split a Votemarket campaign into voter vs LP shares by
@@ -179,4 +213,5 @@ negligible for the dynamics.
 ```sh
 uv run python fit_pool_dynamics.py --save pics/pool_dynamics_fit.png
 uv run python fit_pool_dynamics_simple.py --save pics/pool_dynamics_simple_fit.png
+uv run python fit_pool_dynamics_spectrum.py --save pics/pool_dynamics_spectrum_fit.png
 ```
