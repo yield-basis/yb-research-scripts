@@ -88,6 +88,38 @@ from ~$1.5M to ~$40M within a day, which the smooth relaxation rides as an envel
 * The earlier per-campaign fits (τ_in ~9–11 d) measured an effective inflow during
   high-APR campaigns — consistent with the rush regime here, not the slow base τ_in.
 
+## Analytically solvable simplification (fee = 0, p_in = 1)
+
+Two harmless simplifications make the inflow ODE solvable in closed form: drop the small
+trading fee (~0.26% vs the ~2× band) and fix the rush exponent at `p_in = 1` (the fitted
+1.03 is degenerate with τ_in and ≈ 1). Then, with `x/x_hi = L*/L` and `u ≡ L/L*`, the
+inflow law collapses to a separable autonomous ODE:
+
+```
+du/dt = (1/τ_in)·(1 − u)·u^{-1}
+```
+
+whose exact solution is `t/τ_in = ln((1−u0)/(1−u)) − (u − u0)`, invertible via the
+principal Lambert-W function:
+
+```
+L(t) = L*·[ 1 + W₀(−e^{−T}) ] ,   T = t/τ_in + (1−u0) − ln(1−u0)
+```
+
+It contains both earlier pictures as limits: **early (`u≪1`) `L ∝ √t`** — the rush — and
+**late (`u→1`) `1−u ∝ e^{−t/τ_in}`** — the §3 single exponential. The outflow side
+(`p=0`) is a pure exponential. (`fit_pool_dynamics_simple.py`.)
+
+![simplified fit + closed-form check](pics/pool_dynamics_simple_fit.png)
+
+The numerical fit of this simplified model loses nothing — **R² 0.976** (vs 0.974 full) —
+confirming fee and the exact `p_in` carry no real information. The bottom-right panel
+validates the closed form: integrating the ODE numerically against a constant reward lies
+exactly on `1 + W₀(−e^{−T})`, tracking the `√(2t/τ_in)` rush asymptote before the plateau.
+(As always the *internal* parameters drift — this fit lands τ_in ≈ 57 d and a narrow band
+[1.52, 1.60]× — a different point in the same flat valley; only the curve and the overall
+responsiveness are pinned, not the individual edges/τ.)
+
 ## Incentive accounting — the April Votemarket campaign (two channels)
 
 The model reads the **Curve gauge** `reward_data(YB)` only, so YB paid through other
@@ -135,6 +167,8 @@ negligible for the dynamics.
 
 * `fit_pool_dynamics.py` — the unified TVL-dynamics fit (`--x-lo/--x-hi` to fix the
   band; default fits all four parameters).
+* `fit_pool_dynamics_simple.py` — the analytically solvable simplification (fee = 0,
+  p_in = 1), with the Lambert-W closed-form check.
 * `trace_yb_recipients.py` — aggregate YB Transfer recipients over a block window
   (node RPC, `fetch_multi`-batched `getLogs`, tqdm).
 * `trace_votemarket_lp.py` — split a Votemarket campaign into voter vs LP shares by
@@ -144,4 +178,5 @@ negligible for the dynamics.
 
 ```sh
 uv run python fit_pool_dynamics.py --save pics/pool_dynamics_fit.png
+uv run python fit_pool_dynamics_simple.py --save pics/pool_dynamics_simple_fit.png
 ```
