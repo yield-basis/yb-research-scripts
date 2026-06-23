@@ -101,11 +101,27 @@ the fitted `p_in = 1.03` it is marginally superlinear, and the proportionality f
 not a constant — it works out to `rewards / (m²·τ_in·x_hi²)`, i.e. it scales with the
 reward rate and inversely with the market rate.
 
-**Why there is no clean `y = f(t)`:** because `x` depends on `L`, the
-ODE is nonlinear and self-coupled, and it is driven by the *measured* series `rewards(t)`,
-`m(t)` rather than a single step — so it is integrated numerically (the one-ODE fit in the
-figure). §3's `a·e^(−t/τ) + b` is exactly the special case of a constant `τ` and a
-single reward step.
+**The model we simulate (fee = 0, p_in = 1) — and its closed form.** The controller sims
+(§7–8) and the cross-candidate spreadsheet use the simplified version: drop the small fee
+and fix `p_in = 1` (it fits *better*, R² 0.976; `REPORT_pool_dynamics.md`). With `u ≡ L/L*`
+and `x/x_hi = L*/L`, the inflow ODE becomes separable —
+
+```
+du/dt = (1 − u)·u^{-1} / τ_in ,      u = L/L* ,   L* = rewards/(x_hi·m)
+```
+
+— and is solvable in closed form via the principal Lambert-W function `W₀`:
+
+```
+t/τ_in = ln((1−u0)/(1−u)) − (u − u0)   ⇔   L(t) = L*·[1 + W₀(−e^{−T})] ,   T = t/τ_in + (1−u0) − ln(1−u0)
+```
+
+One curve containing both earlier pictures: **early `L ∝ √t`** (the rush) and **late
+`1−u ∝ e^{−t/τ_in}`** (§3's single exponential). The closed form is exact within a
+constant-reward epoch; with the real time-varying `rewards(t)`, `m(t)` the model is simply
+integrated numerically (what the fits and the controller sims do). (The full version —
+non-zero fee, `p_in ≠ 1` — has no elementary `y=f(t)` because `x` depends on `L`; the
+`fee=0, p_in=1` reduction is precisely what buys the closed form.)
 
 The bottom-row zooms show the two take-offs (Oct-2025, Feb-2026): the pool jumps from
 ~$1.5M to ~$40M **within a day** as discrete deposit steps. So the effective inflow time
@@ -235,6 +251,36 @@ spiky, coverage rides the **clean rush channel**, so leakage barely bites: spend
 pool *and* a higher APR, and spend = APR × TVL). Either way the scheme stays **near-free
 insurance**, fully closed with the existing reserve.
 
+### Robustness across all BTC candidates
+
+The cleanest "how much do we spend" test uses the **simplified analytical plant**,
+end-to-end with *its own* fitted parameters (`fit_pool_dynamics_simple.py`, R² 0.976:
+`fee = 0`, `p_in = 1`, `x_hi = 1.60`, `τ_in = 57 d`, `τ_out = 6.0 d`) and the rush-clean
+leakage (slow 56% / rush 100%): optimise the PID **once** on `mf120_of163` and apply the
+**same fixed gains** to every candidate (`incentive_sim_candidates.py` →
+`incentive_candidates.csv`). Max residual net pressure (% of half-TVL):
+
+| candidate | peak P | spend %/yr | coverage | 0% reserve | 10% | 20% |
+|---|---:|---:|---:|---:|---:|---:|
+| mf120_of135 | 48.2% | 0.109 | 98.6% | 1.20% | **0.00%** | **0.00%** |
+| mf120_of163 (opt) | 48.3% | 0.134 | 98.9% | 1.32% | **0.00%** | **0.00%** |
+| mf146 / dust3600 | 38.9% | 0.083 | 98.6% | 1.25% | **0.00%** | **0.00%** |
+| mf146 / dust600 | 23.5% | 0.081 | 98.5% | 1.39% | **0.00%** | **0.00%** |
+
+On **every** candidate: ~99% coverage, **~1.2–1.4% residual at 0% reserve** (just the
+irreducible ~2-h instantaneous tip), and **0% uncovered with a 10% or 20% reserve**. Spend
+is **0.08–0.13%/yr** of half-TVL (worst case 0.13%, leakage-aware, ×1.15 over no-leak).
+This directly confirms the §1 headline: a **10–20% standing reserve eliminates the net
+pressure entirely** across all tested scenarios. (`mf137` ships a `.json.xz`, a different
+dump the npz pipeline doesn't read, so it is excluded.)
+
+> Note on the dead band: the simplified single-pool fit *collapses* the band to
+> [1.52×, 1.60×] (the edges trade off with τ_in and aren't separately pinned), well below
+> the ~2× activation threshold that the response function and operating point indicate
+> (§2, §5). We use the fit's own `x_hi = 1.60` here for self-consistency; using the robust
+> ~2× instead leaves the headline essentially unchanged (spend ≈ 0.13%/yr, coverage
+> ~99.4%, 0% uncovered at ≥10% reserve) — the result is robust to the band choice.
+
 ---
 
 ## 9. The overall model, with measured coefficients
@@ -261,20 +307,34 @@ acceleration on inflow.
 | crvUSD savings premium | **~1%** over USDC (scrvUSD ≈ sUSDS) | §2 |
 | market norm m | Aave USDC, 7-day EMA (≈ sUSDS ≈ scrvUSD) | §2 |
 
-### Controller settings (optimiser outputs — re-tune per deployment)
+### The parameters actually used (the found design point)
+
+The cross-candidate sims (§8) use the **simplified analytical plant** — the `fee = 0`,
+`p_in = 1` Lambert-W model above — taken end-to-end with *its own* fitted parameters
+(`fit_pool_dynamics_simple.py`), the rush-clean leakage, and a PID optimised on
+`mf120_of163`:
 
 | symbol | value | role |
 |---|---|---|
-| dead_band | 2× market | hysteresis floor in `x = 2 + S*/β` |
-| x_max | 12–34× market | APR ceiling = worst-case fill speed (12× suffices with 20% reserve) |
-| β | 0.5 | deposit elasticity (sink per excess APR-multiple); coverage robust to it, only spend scales |
-| α, Kp, Ki, Kd, Imax | ≈ 1.1–1.3, 50, ~1700/yr, ~0.011 yr, ~2.5 | PID gains (P,S in frac half-TVL, time in yr) |
-| reserve | 20% (YB-funded) | standing buffer stacked on top |
+| plant | `p_in = 1`, `fee = 0` (analytical / Lambert-W) | depositor response, §4 |
+| dead band | `x_lo = 1.52×`, `x_hi = 1.60×` market | from the simplified fit (collapsed — see note) |
+| τ_in / τ_out | 57 d / 6.0 d | base fill / drain (rush dominates fill) |
+| β | 0.5 | deposit elasticity (sink per excess APR-multiple); coverage robust, only spend scales |
+| x_max | 22× market | offer cap = worst-case fill speed |
+| efficiency | slow channel **56%**, rush **100%** (rush-clean) | peer cannibalisation, §6 |
+| **PID gains** | **α = 1.16, Kp = 50, Ki = 1988 /yr, Kd = 0.0158 yr, Imax = 2.93** | optimised on `mf120_of163` (P,S in frac half-TVL, t in yr) |
+| reserve | 10–20% (YB-funded) | standing buffer stacked on top — 10% already gives 0% uncovered (§8) |
+
+Gains are optimiser outputs (re-tune per deployment). The band edges are *not* pinned by
+the fit (they collapse to [1.52, 1.60] in the degenerate valley, below the ~2× the
+response function shows, §5); the headline spend/coverage is robust to using either the
+fit's `x_hi = 1.60` or the robust ~2× (§8 note).
 
 ### Headline economics
 
-* **Spend ~0.15%/yr of half-TVL** for ~99% coverage of all positive net pressure incl.
-  the 2024-08-05 crash, fully closed with the 20% reserve — leakage-aware.
+* **Spend ~0.08–0.13%/yr of half-TVL** (worst candidate 0.13%, leakage-aware) for ~99%
+  coverage of all positive net pressure incl. the 2024-08-05 crash — **fully closed (0%
+  uncovered) with a ≥10% reserve on every BTC candidate** (§8 spreadsheet).
 * **Scale-free:** all figures are fractions of half-TVL, so they hold from ~$120M to
   billions; the price is a fraction of TVL and co-scales with the YB-earnings budget that
   funds it.
