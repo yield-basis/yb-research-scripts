@@ -72,6 +72,41 @@ the inflow rate scales as `(x / x_hi)^p_in` above the band edge:
 | **rush exponent p_in** | **1.03** (inflow accelerates ~linearly above the band) |
 | R² (log-TVL, one ODE) | 0.974 |
 
+**The model.** It is the *same* relaxation as §3, `dL/dt = (L* − L)/τ`, but the APR is
+**endogenous** so the rate is state-dependent. With `L` = staked TVL, market rate `m` and
+reward stream `rewards(t)`, the pool APR as a multiple of the market is
+`x = (fee + rewards/L) / m` (fee ≈ 0.26%, small). On the inflow side (`x > x_hi`):
+
+```
+dL/dt = (L* − L) / τ_eff,   τ_eff = τ_in · (x_hi / x)^p_in,   L* = rewards / (x_hi·m − fee)
+```
+
+i.e. §3's exponential with a **state-dependent time constant** `τ_eff`: far above the
+band edge (`x ≫ x_hi`) it shrinks as `(x_hi/x)^p_in` so filling is fast (the rush); near
+the edge it relaxes to the plain `τ_in`. Constants `τ_in = 30 d`, `x_hi = 2.14`,
+`p_in = 1.03` (outflow side: `τ_out = 5.9 d` toward `L* = rewards/(x_lo·m − fee)`,
+`x_lo = 1.50`, §5).
+
+**Plain-language form.** Because the fitted `p_in ≈ 1`, substituting the equilibrium gap
+`L* − L` into the rush rate collapses the inflow law to (dropping the small fee):
+
+```
+dL/dt  ∝  (APR − x_hi·m)  =  (APR − 2×·market)
+```
+
+— deposits arrive at a speed **proportional to how far the APR sits above the ~2×
+dead-band edge**, and self-stop once the inflow dilutes the (endogenous) APR back down to
+2× market. This is the *exact* algebraic limit of the ODE at `p_in = 1` and zero fee; at
+the fitted `p_in = 1.03` it is marginally superlinear, and the proportionality factor is
+not a constant — it works out to `rewards / (m²·τ_in·x_hi²)`, i.e. it scales with the
+reward rate and inversely with the market rate.
+
+**Why there is no clean `y = f(t)`:** because `x` depends on `L`, the
+ODE is nonlinear and self-coupled, and it is driven by the *measured* series `rewards(t)`,
+`m(t)` rather than a single step — so it is integrated numerically (the one-ODE fit in the
+figure). §3's `a·e^(−t/τ) + b` is exactly the special case of a constant `τ` and a
+single reward step.
+
 The bottom-row zooms show the two take-offs (Oct-2025, Feb-2026): the pool jumps from
 ~$1.5M to ~$40M **within a day** as discrete deposit steps. So the effective inflow time
 is `τ_in·(x_hi/x)^p_in` — e.g. ~5 d when APR is ~10× the threshold — meaning **"how fast
