@@ -133,15 +133,14 @@ def main():
 
     # right: closed-form validation on a CONSTANT-reward step (analytic must equal numerical)
     av = axd["zval"]
+    from scipy.integrate import solve_ivp
     R = float(np.median(rewards[S["yb_on"]])); mc = float(np.median(S["m"]))
     Lstar = R / (xhi * mc); L0 = 0.01 * Lstar; u0 = L0 / Lstar
-    days = np.linspace(1e-3, 4 * tin, 4000); ty = days / 365.0
-    # numerical integration of the simplified inflow ODE, constant R, mc
-    Ln = np.empty(days.size); Ln[0] = L0
-    for i in range(1, days.size):
-        x = (R / Ln[i - 1]) / mc
-        dLn = (Lstar - Ln[i - 1]) * (x / xhi) / tin_yr * (ty[i] - ty[i - 1]) if x > xhi else 0.0
-        Ln[i] = Ln[i - 1] + dLn
+    days = np.geomspace(1e-2, 4 * tin, 600); ty = days / 365.0   # log-spaced: resolve the fast start
+    # adaptive integration of the simplified inflow ODE, constant R, mc (Euler is too stiff here)
+    rhs = lambda t, y: [(Lstar - y[0]) * ((R / y[0] / mc) / xhi) / tin_yr if (R / y[0] / mc) > xhi else 0.0]
+    sol = solve_ivp(rhs, [0.0, ty[-1]], [L0], t_eval=ty, rtol=1e-9, atol=1e-3 * L0, method="LSODA")
+    Ln = sol.y[0]
     La = analytic_inflow(ty, u0, Lstar, tin_yr)
     av.plot(days, Ln / Lstar, lw=2.6, color="crimson", alpha=0.5, label="numerical ODE")
     av.plot(days, La / Lstar, lw=1.2, color="dodgerblue", ls="--", label="analytic: 1+W₀(−e^−T)")
