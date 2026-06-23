@@ -40,8 +40,7 @@ The market norm used by the controller is **Aave USDC** for the net-pressure bac
 
 ## 3. Temporal response to incentives
 
-How fast does crvUSD arrive when a venue's APR jumps, and leave when it stops? Measured
-two independent ways on the PYUSD/crvUSD pool (`REPORT_liquidity_response.md`,
+How fast does crvUSD arrive when a venue's APR jumps, and leave when it stops? Measured two independent ways on the PYUSD/crvUSD pool (`REPORT_liquidity_response.md`,
 `REPORT_pool_apr_response.md`).
 
 **Raw liquidity, single-exponential per region** `y = a·e^(−t/τ) + b`:
@@ -53,16 +52,7 @@ two independent ways on the PYUSD/crvUSD pool (`REPORT_liquidity_response.md`,
 
 ![liquidity response fits](pics/pool_liquidity_fit.png)
 
-**Per-campaign relaxation** (YB campaigns switch ~weekly; fit each inter-event segment,
-sidestepping the APR↔TVL simultaneity): τ_out median **4.1 d** (5 clean segments),
-cleanest inflow ramp τ_in **8.5 d**.
-
-![campaign relaxation](pics/campaign_response.png)
-
-**Takeaways:** liquidity **arrives ~2× slower than it leaves** (τ_in ~8–11 d vs τ_out
-~4–6 d). Crucially, campaigns fire faster (~weekly) than the inflow time constant, so the
-pool never fully saturates on the way in but decays cleanly when incentives stop. These
-are the τ's that limit how fast the controller can close a spike.
+**Takeaways:** liquidity **arrives ~2× slower than it leaves** (τ_in ~11 d vs τ_out ~6 d). However, there are few other effects to account for in a complete model - see in the next paragraph.
 
 ---
 
