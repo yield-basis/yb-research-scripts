@@ -267,12 +267,14 @@ leakage (slow 56% / rush 100%): optimise the PID **once** on `mf120_of163` and a
 | mf146 / dust3600 | 38.9% | 0.083 | 98.6% | 1.25% | **0.00%** | **0.00%** |
 | mf146 / dust600 | 23.5% | 0.081 | 98.5% | 1.39% | **0.00%** | **0.00%** |
 
-On **every** candidate: ~99% coverage, **~1.2–1.4% residual at 0% reserve** (just the
-irreducible ~2-h instantaneous tip), and **0% uncovered with a 10% or 20% reserve**. Spend
-is **0.08–0.13%/yr** of half-TVL (worst case 0.13%, leakage-aware, ×1.15 over no-leak).
-This directly confirms the §1 headline: a **10–20% standing reserve eliminates the net
-pressure entirely** across all tested scenarios. (`mf137` ships a `.json.xz`, a different
-dump the npz pipeline doesn't read, so it is excluded.)
+On **every** candidate: ~99% coverage, **~1.2–1.4% residual at 0% reserve** (on this 2-hour
+grid), and **0% uncovered with a 10% or 20% reserve**. Spend is **0.08–0.13%/yr** of
+half-TVL (worst case 0.13%, leakage-aware, ×1.15 over no-leak). This directly confirms the
+§1 headline: a **10–20% standing reserve eliminates the net pressure entirely** across all
+tested scenarios. (`mf137` ships a `.json.xz`, a different dump the npz pipeline doesn't
+read, so it is excluded.) **The 2-hour grid smooths sub-hour flash crashes, so its
+0%-reserve residual is optimistic — see the fine-resolution analysis below for the true
+instantaneous tip.**
 
 > Note on the dead band: the simplified single-pool fit *collapses* the band to
 > [1.52×, 1.60×] (the edges trade off with τ_in and aren't separately pinned), well below
@@ -280,6 +282,39 @@ dump the npz pipeline doesn't read, so it is excluded.)
 > (§2, §5). We use the fit's own `x_hi = 1.60` here for self-consistency; using the robust
 > ~2× instead leaves the headline essentially unchanged (spend ≈ 0.13%/yr, coverage
 > ~99.4%, 0% uncovered at ≥10% reserve) — the result is robust to the band choice.
+
+### The reserve and the sharp tip — fine resolution
+
+The 2-hour grid above smooths away sub-hour **flash crashes**, so its "~1.3% residual"
+understates the true instantaneous tip. Re-optimising the PID on a **15-minute** grid
+(`incentive_reserve_fine.py`, full 2.4-year series, ~83k steps — the peak net pressure
+resolves to **54.5%** vs the 48% the coarse grid showed) gives the honest worst case:
+
+* coverage **99.7%**, spend **0.095%/yr** — *unchanged* (these are robust to resolution);
+* but the **max instantaneous residual is 7.7%** of half-TVL — far above the 2-h figure.
+
+It is **brief and rate-driven**: the binding event is **not** the gradual Aug-2024 grind to
+54%, but a **30-minute flash crash on 2024-01-03** — BTC **−5.9% ($44.5k→$41.9k) in 30 min**
+slamming net pressure 0→20% faster than the sink can react. **The residual is set by `dP/dt`,
+not the peak level.** And it is fleeting — over 2.4 years the residual is above 2% for only
+~0.5 h and above 5% for ~0.2 h. What a standing reserve leaves uncovered:
+
+| reserve | max uncovered | time uncovered (2.4 yr) |
+|---:|---:|---:|
+| 0% | 7.7% | — |
+| 1% | 6.7% | 14 h |
+| 2% | 5.7% | 0.5 h |
+| 3% | 4.7% | 0.2 h |
+| 5% | 2.7% | 0.2 h |
+| ~8% | 0% | 0 |
+
+So a **2–3% reserve covers everything except a sub-30-minute blip** over the whole backtest;
+**full** coverage of the sharpest flash needs **~8%** of half-TVL. This **vindicates the
+10–20% headline reserve** as conservative-safe (and corrects the coarse-grid intuition that
+~1.4% suffices). The real design knob is **how brief a peg deviation is tolerable** vs the
+reserve size — *not* the spend, which stays ~0.1%/yr regardless. **Caveat:** the tip is
+itself resolution-limited — finer than 15 min would reveal a still-higher, still-briefer
+spike approaching the instantaneous flash magnitude.
 
 ---
 
