@@ -19,7 +19,7 @@ The net pressure can be made nonpositive 99% of the times via dynamically changi
 * The depositor response is a **dead-band relaxation**: crvUSD only moves once a venue pays ~**1.6× the market rate**, then fills with a ~**week**-scale time constant and drains a bit faster (~6 d), according to our measurements (§3–5).
 * When fresh large incentives are given - the inflow rate is *very high*. We call it **rush inflow** and model it as well.
 * Incentivising a crvUSD pool **cannibalises ~44%** of its new TVL from *other* crvUSD pools, so its net new-liquidity efficiency is **~56%** — but that leakage is **slow**. Fortunately, this does not affect the rush inflow (§6). So combining these two effects leads to having to spend ×1.15 more incentives than without cannibalasing incentives of peer pools.
-* A **PID-with-feed-forward** controller covers **~99% of all positive net pressure** — including the worst crash in a 2.4-year backtest — for **~0.15%/yr of Yield Basis TVL**, fully closed with the existing 10-20% YB-token reserve (§7–8).
+* A **PID-with-feed-forward** controller covers **~99% of all positive net pressure** — including the worst crash in a 2.4-year backtest — for **~0.1%/yr of Yield Basis TVL** (≤0.13% worst-case, §8), fully closed with the existing 10-20% YB-token reserve (§7–8).
 
 ---
 
@@ -52,7 +52,7 @@ How fast does crvUSD arrive when a venue's APR jumps, and leave when it stops? M
 
 ![liquidity response fits](pics/pool_liquidity_fit.png)
 
-**Takeaways:** liquidity **arrives ~2× slower than it leaves** (τ_in ~11 d vs τ_out ~6 d). However, there are few other effects to account for in a complete model - see in the next paragraph.
+**Takeaways:** liquidity **arrives ~2× slower than it leaves** (~11 d rise vs ~6 d drop). This ~11 d is the *effective* fill during a campaign; §4 shows it is a slow base time constant accelerated by a **rush**, so a single τ is not the whole story — see the next paragraph.
 
 ---
 
@@ -61,8 +61,8 @@ How fast does crvUSD arrive when a venue's APR jumps, and leave when it stops? M
 A single τ undersells the inflow: when a *small* pool offers a very high APR, deposits
 arrive in a **burst** much faster than a fixed exponential. We fit one **dead-band
 relaxation ODE** to the whole pyUSD TVL series (`REPORT_pool_dynamics.md`). The chosen,
-**simplified form** — drop the trading fee (~0.26%, negligible vs the band) and fix the
-rush exponent **`p_in = 1`** — fits best (**R² 0.976**) and is **analytically solvable**.
+**simplified form** — drop the trading fee (~0.26% APR, small) and fix the rush exponent
+**`p_in = 1`** — fits best (**R² 0.976**) and is **analytically solvable**.
 
 ![simplified pool-dynamics fit + closed-form check](pics/pool_dynamics_simple_fit.png)
 
@@ -180,8 +180,8 @@ measured depositor dynamics as the plant (`REPORT_incentive_sim.md`):
 
 A derivative term **buys the shoulders, not the spike**: it front-loads the offer at
 onset so the sink is already climbing when the multi-day plateau arrives, but no amount of
-APR fills a ~2 h instantaneous tip given τ_in — only a pre-built reserve or the high-APR
-**burst** can.
+APR fills a **sub-hour instantaneous flash** faster than the sink can react (§8) — only a
+pre-built reserve absorbs that.
 
 ---
 
