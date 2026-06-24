@@ -134,7 +134,9 @@ on-gauge YB — the biweekly StakeDAO/Votemarket pYB to peers was a **voter brib
 their own fading CRV (TVL ∝ reward pot, `corr = 0.86`) — **plus a real, sustained
 competition effect**: while pyUSD is incentivised, the peers' reward is ~flat (−4%/yr) yet
 their TVL drains **−35%/yr vs −15%/yr** when it is not, and their APR multiple ticks **up**
-(2.00 → 2.16) — capital leaving for a better-paid home.
+(2.00 → 2.16) — capital leaving for a better-paid home. (These peer pools sit at a ~2×
+operating multiple, higher than the pyUSD pool's ~1.6× dead band of §5 — different pools
+carry different risk premia; this section is about the *peers*, not the chosen model.)
 
 ![peer dead-band fit](pics/others_dynamics_fit.png)
 
