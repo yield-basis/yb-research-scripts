@@ -61,8 +61,9 @@ How fast does crvUSD arrive when a venue's APR jumps, and leave when it stops? M
 A single τ undersells the inflow: when a *small* pool offers a very high APR, deposits
 arrive in a **burst** much faster than a fixed exponential. We fit one **dead-band
 relaxation ODE** to the whole pyUSD TVL series (`REPORT_pool_dynamics.md`). The chosen,
-**simplified form** — drop the trading fee (~0.26% APR, small) and fix the rush exponent
-**`p_in = 1`** — fits best (**R² 0.976**) and is **analytically solvable**.
+**simplified form** — drop the part of pool APR coming from trading fee (~0.26% APR, small)
+and make the time constant of rush-in exponent just inversely proportional to the APR (**`p_in = 1`**) —
+fits best (**R² 0.976**) and is **analytically solvable**.
 
 ![simplified pool-dynamics fit + closed-form check](pics/pool_dynamics_simple_fit.png)
 
@@ -92,7 +93,7 @@ plain exponential settle). The closed form is exact within a constant-reward epo
 real, time-varying `rewards(t)`, `m(t)` series is integrated numerically (the fit and the
 controller sims).
 
-Equivalently, since `p_in = 1` the inflow speed is **∝ (APR − x_hi·m)** — deposits arrive
+Equivalently, the inflow speed is **∝ (APR − x_hi·m)** — deposits arrive
 proportionally to how far APR sits above the dead-band edge, and self-stop once the inflow
 dilutes the (endogenous) APR back down to it. So **"how fast LPs arrive" is dominated by
 how attractive the pool is, not a single constant** — which is what lets a short, high-APR
@@ -125,8 +126,8 @@ quantified this against the **aggregate of all 20 all-stablecoin crvUSD/scrvUSD 
 
 **Decomposition** (`REPORT_crvusd_aggregate.md`). Splitting the aggregate into pyUSD vs
 others, and the others' incentive into its true LP-reaching components (CRV emissions +
-on-gauge YB — the biweekly StakeDAO/Votemarket pYB to peers was a **voter bribe**,
-`hook = 0x0`, already reflected in CRV, *not* an LP reward):
+on-gauge YB + the part of StakeDAO/Votemarket *voter bribe* which was unused for the bribe
+and went as a direct LP incentive instead):
 
 ![TVL + incentive decomposition](pics/crvusd_others.png)
 
