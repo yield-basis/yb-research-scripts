@@ -10,14 +10,14 @@ out. Two candidate causes:
 * **(B) competition** — the incentivised pyUSD pool drew capital away over its whole
   campaign (a *sustained* effect, distinct from the rush spike).
 
-`fit_others_dynamics.py` fits the **same dead-band relaxation model** used for pyUSD
-(`REPORT_pool_dynamics.md`) to **others = aggregate − pyUSD**, driven **only by the
-others' own incentive** (CRV + on-gauge YB; the non-pyUSD pYB was a voter bribe, not an
-LP reward, so it is already inside CRV). It includes the inflow **rush** term with the
-exponent **p_in = 1.03 grafted from the pyUSD pool** (where it was measured) rather than
-re-fit from the noisy aggregate. The incentive-only model is therefore the **(A)-only
-counterfactual** — whatever TVL it fails to explain is the candidate for (B). The shaded
-bands mark when pyUSD itself was being incentivised.
+`fit_others_dynamics.py` fits the **same simplified dead-band relaxation model** chosen for
+pyUSD (`REPORT_pool_dynamics.md`: fee = 0, **`p_in = 1`**, the analytically-solvable form) to
+**others = aggregate − pyUSD**, driven **only by the others' own incentive** (CRV +
+on-gauge YB; the non-pyUSD pYB was a voter bribe, not an LP reward, so it is already inside
+CRV). The rush exponent `p_in = 1` is grafted from pyUSD; the band and τ are fit to the
+peers (they are different pools — see below). The incentive-only model is therefore the
+**(A)-only counterfactual** — whatever TVL it fails to explain is the candidate for (B).
+The shaded bands mark when pyUSD itself was being incentivised.
 
 (Adding the grafted rush leaves the fit essentially unchanged — R² 0.51, same band, τ_in
 shifts 16→24 d to absorb it — because the aggregate operates *near* its equilibrium

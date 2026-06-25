@@ -24,7 +24,7 @@ Model (state L = others staked TVL, $):
     x          = a / m(t)              m = sUSDS market rate
     x>x_hi: inflow to rewards/(x_hi·m), rate (1/τ_in)·(x/x_hi)^p_in;  x<x_lo: outflow to
     rewards/(x_lo·m), rate 1/τ_out;  else hold.  Fitted: τ_in, τ_out, x_lo, x_hi; the
-    rush exponent p_in is GRAFTED from the pyUSD pool (1.03), not re-fit here.
+    rush exponent p_in = 1 is grafted from the simplified pyUSD model (§4), not re-fit here.
 
 Usage
 -----
@@ -46,10 +46,12 @@ YEAR = 365.0 * 86400.0
 # pyUSD's hooked April LP campaign (the only pYB that reached pyUSD LPs); on-gauge YB
 # windows come from yb_period_finish in pool_apr.csv.
 PY_LM_START, PY_LM_END = "2026-04-16", "2026-04-30"
-# Rush exponent measured on the pyUSD pool (fit_pool_dynamics.py): inflow accelerates
-# as (x/x_hi)^p_in above the band edge. We GRAFT it here rather than re-fitting it from
-# the noisy aggregate — the rush is a depositor-behaviour constant, not pool-specific.
-P_IN = 1.03
+# Rush exponent of the chosen simplified depositor model (fee=0, p_in=1; the
+# analytically-solvable form, REPORT_pool_dynamics.md). We GRAFT it here rather than
+# re-fitting it from the noisy aggregate — the rush is a depositor-behaviour constant,
+# not pool-specific. (fee is already omitted in this aggregate fit, so this matches the
+# §4 simplified model end-to-end.)
+P_IN = 1.0
 
 
 def _ts(s):

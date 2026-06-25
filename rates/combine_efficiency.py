@@ -28,7 +28,8 @@ import argparse
 import numpy as np
 
 import fit_others_dynamics as OT
-import fit_pool_dynamics as PY
+import fit_pool_dynamics as PY            # data loader
+import fit_pool_dynamics_simple as PYS    # the chosen simplified pyUSD model (fee=0, p_in=1)
 
 
 def _k(Lpy, gap):
@@ -39,11 +40,11 @@ def _k(Lpy, gap):
 
 def compute():
     Sp = PY.load_series()
-    pp, _ = PY.fit(Sp)
-    Lp_full, _ = PY.simulate(Sp, *pp)
+    pp, _ = PYS.fit(Sp)                            # simplified pyUSD model (τin,τout,xlo,xhi)
+    Lp_full, _ = PYS.simulate(Sp, *pp)
     Sp0 = dict(Sp)
     Sp0["yb_val"] = np.zeros_like(Sp["yb_val"]); Sp0["yb_lm_val"] = np.zeros_like(Sp["yb_lm_val"])
-    Lp_base, _ = PY.simulate(Sp0, *pp)            # pyUSD without the YB campaigns
+    Lp_base, _ = PYS.simulate(Sp0, *pp)           # pyUSD without the YB campaigns
 
     So = OT.load_series()
     po, _ = OT.fit(So)
@@ -70,7 +71,7 @@ def main():
     args = ap.parse_args()
     R = compute()
     k = R["k_all"]
-    print(f"pyUSD params (tin,tout,xlo,xhi,p_in) = {', '.join(f'{x:.2f}' for x in R['pp'])}")
+    print(f"pyUSD simplified params (tin,tout,xlo,xhi) = {', '.join(f'{x:.2f}' for x in R['pp'])}")
     print(f"others params (tin,tout,xlo,xhi)     = {', '.join(f'{x:.2f}' for x in R['po'])}")
     print(f"leakage k = % of pyUSD TVL that must be added back to peers to match their model:")
     print(f"  k (vs total pyUSD TVL, full series)      = {R['k_all']*100:.0f}%  "
