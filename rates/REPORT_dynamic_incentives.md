@@ -132,14 +132,7 @@ and went as a direct LP incentive instead):
 ![TVL + incentive decomposition](pics/crvusd_others.png)
 
 **Peer dead-band fit** (`REPORT_others_dynamics.md`). Fitting the peers with the **same
-simplified response model** as §4 (fee = 0, `p_in = 1`), their long decline is mostly their
-own fading CRV (TVL ∝ reward pot, `corr = 0.86`) — **plus a real, sustained competition
-effect**: while pyUSD is incentivised, the peers' reward is ~flat (−4%/yr) yet their TVL
-drains **−35%/yr vs −15%/yr** when it is not, and their APR multiple ticks **up** (2.00 →
-2.16) — capital leaving for a better-paid home. (The model *form* matches §4; the **band is
-fit to the peers** and comes out **~2×**, higher than the pyUSD pool's ~1.6× of §5 —
-different pools carry different risk premia, and the result is robust to this: the leakage
-below is unchanged from the earlier `p_in = 1.03` fit.)
+simplified response model** as §4.
 
 ![peer dead-band fit](pics/others_dynamics_fit.png)
 
