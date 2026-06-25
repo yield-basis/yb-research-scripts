@@ -170,8 +170,8 @@ measured depositor dynamics as the plant (`REPORT_incentive_sim.md`):
 * Four parallel paths set the target sink `S*`: feed-forward `α·P`, proportional `Kp·e`,
   integral `Ki·∫e`, and a derivative `Kd·max(0, dP/dt)` on **rising pressure only** (to
   pre-empt a developing spike without derivative kick).
-* `S*` is clamped and mapped to an **offered APR multiple** `x = dead_band + S*/β`
-  (β = sink attracted per unit excess ratio), hard-capped at `x_max`.
+* `S*` is clamped to `S_cap` and mapped to an **offered APR multiple** `x = dead_band + S*/β`
+  (β = sink attracted per unit excess ratio); the clamp caps the worst-case fill speed.
 * **Spend = (x − 1)·m·S** — the bonus APR paid **only on the attracted sink**, not the
   whole vault. The plant `1/(τs+1)` is the asymmetric depositor response (τ_in/τ_out + the
   §4 rush).
@@ -180,6 +180,62 @@ A derivative term **buys the shoulders, not the spike**: it front-loads the offe
 onset so the sink is already climbing when the multi-day plateau arrives, but no amount of
 APR fills a **sub-hour instantaneous flash** faster than the sink can react (§8) — only a
 pre-built reserve absorbs that.
+
+### Controller loop (documentation pseudocode)
+
+A minimal, readable version of the whole loop — read the pool, form the net-pressure
+signal, run the PID, and output the bonus APR to set plus the residual still uncovered.
+The YB-pool and depositor evolution is assumed (`...`); the constants are the §9 design
+point.
+
+```python
+# Measured / fitted constants (see §4, §6, §9)
+DEAD_BAND  = 1.6        # x_hi: LPs only start arriving above ~1.6x the market rate
+BETA       = 0.5        # sink (frac of half-TVL) drawn per unit of offer above the band
+S_CAP      = 22.0       # clamp on the target sink (sets the worst-case offered APR)
+ALPHA      = 1.16       # feed-forward gain on the pressure
+KP, KI, KD = 50.0, 1988.0, 0.0158   # PID gains (P, S in frac of half-TVL; time in YEARS)
+I_MAX      = 2.93       # integral clamp
+RESERVE    = 0.10       # standing YB-funded buffer absorbing the first 10% (frac half-TVL)
+
+I, prev_P, S = 0.0, 0.0, 0.0          # integral accumulator, last pressure, current sink
+
+while True:
+    dt = ...                          # control timestep, in YEARS
+
+    # 1. read the YB pool, form the net-pressure signal (the PID reference)
+    debt, crvusd, btc, price = read_pool()        # crvusd = b0, btc = b1, price = BTC/USD
+    half_tvl     = (crvusd + btc * price) / 2
+    net_pressure = (debt - crvusd) / half_tvl     # >0 => crvUSD shortfall in the sink (bad)
+    P            = max(0.0, net_pressure)          # only positive pressure is acted on
+
+    # 2. read the program's sink (new crvUSD we parked) and the market rate
+    S = program_crvusd_in_sink() / half_tvl        # frac of half-TVL
+    m = aave_usdc_apr_ema_7d()                      # market norm, a fraction (e.g. 0.04)
+
+    # 3. PID on the coverage error  e = P - S   (integral + derivative + proportional)
+    e      = P - S
+    I      = clip(I + e * dt, 0.0, I_MAX)           # integral term (clamped)
+    dPdt   = max(0.0, (P - prev_P) / dt)            # derivative on RISING pressure only
+    prev_P = P
+    S_target = clip(ALPHA*P + KP*e + KI*I + KD*dPdt,  0.0, S_CAP)
+
+    # 4. map the target sink to an offered APR and set it
+    x         = DEAD_BAND + S_target / BETA         # offered scrvUSD APR as a multiple of m
+    bonus_apr = (x - 1.0) * m                        # paid ONLY on the program's deposits S
+    set_incentive_apr(bonus_apr)                    # the one thing the controller controls
+
+    # 5. report the residual net pressure the reserve must still absorb
+    residual = max(0.0, P - S - RESERVE)
+    log(net_pressure=net_pressure, offered_x=x, bonus_apr=bonus_apr, residual=residual)
+
+    # 6. the pool + depositors evolve over dt (assumed; NOT part of the controller)
+    #    LevAMM trades / rebalances       -> updates debt, crvusd, btc
+    #    depositors react to bonus_apr    -> updates S, per the §4 dead-band + rush model:
+    #        x > x_hi:  dS/dt = (S* - S) / (tau_in * x_hi/x)    # rush-accelerated inflow
+    #        x < x_lo:  dS/dt = (S* - S) /  tau_out              # slower outflow
+    ...
+```
 
 ---
 
@@ -255,7 +311,7 @@ A deployment runs, each step (`dt` in years): read the pool, form
 `P = max(0, net_pressure)` with `net_pressure = 2·(debt − b0)/(b0 + b1·p)`; read the
 market norm `m` (Aave USDC, 7-day EMA); run the PID on `e = P − S` for a target sink
 `S* = clip(α·P + Kp·e + Ki·I + Kd·max(0,dP/dt), 0, S_cap)`; map to an advertised APR
-multiple `x = dead_band + S*/β` capped at `x_max`; set **bonus APR = (x − 1)·m** paid only
+multiple `x = dead_band + S*/β` (with `S*` clamped at `S_cap`); set **bonus APR = (x − 1)·m** paid only
 on the program's deposits `S`. The depositor plant is `dS/dt = (S*−S)/τ` with the rush
 acceleration on inflow.
 
@@ -285,7 +341,7 @@ The cross-candidate sims (§8) use the **simplified analytical plant** — the `
 | dead band | `x_lo = 1.52×`, `x_hi = 1.60×` market (~1.6× equilibrium) | §4/§5 |
 | τ_in / τ_out | 57 d / 6.0 d | base fill / drain (rush dominates fill) |
 | β | 0.5 | deposit elasticity (sink per excess APR-multiple); coverage robust, only spend scales |
-| x_max | 22× market | offer cap = worst-case fill speed |
+| S_cap | 22 (target-sink clamp) | caps worst-case fill speed ⇒ offer ≲46×; realized peak ~34× |
 | efficiency | slow channel **56%**, rush **100%** (rush-clean) | peer cannibalisation, §6 |
 | **PID gains** | **α = 1.16, Kp = 50, Ki = 1988 /yr, Kd = 0.0158 yr, Imax = 2.93** | optimised on `mf120_of163` (P,S in frac half-TVL, t in yr) |
 | reserve | 10–20% (YB-funded) | standing buffer stacked on top — covers even the sharp tip (§8) |
