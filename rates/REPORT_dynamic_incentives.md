@@ -212,7 +212,9 @@ while True:
 
     # 2. read the program's sink (new crvUSD we parked) and the market rate
     S = program_crvusd_in_sink() / half_tvl        # frac of half-TVL
-    m = aave_usdc_apr_ema_7d()                      # market norm, a fraction (e.g. 0.04)
+    m = aave_usdc_apr_ema_7d()                      # market norm, a fraction (e.g. 0.04);
+                                                    # time series in aave_rate_smoothed.csv.xz
+                                                    # (column `aave_apr_ema7d`)
 
     # 3. PID on the coverage error  e = P - S   (integral + derivative + proportional)
     e      = P - S
@@ -309,7 +311,8 @@ spike approaching the instantaneous flash magnitude.
 
 A deployment runs, each step (`dt` in years): read the pool, form
 `P = max(0, net_pressure)` with `net_pressure = 2·(debt − b0)/(b0 + b1·p)`; read the
-market norm `m` (Aave USDC, 7-day EMA); run the PID on `e = P − S` for a target sink
+market norm `m` (Aave USDC, 7-day EMA — provided as a time series in
+`aave_rate_smoothed.csv.xz`, column `aave_apr_ema7d`); run the PID on `e = P − S` for a target sink
 `S* = clip(α·P + Kp·e + Ki·I + Kd·max(0,dP/dt), 0, S_cap)`; map to an advertised APR
 multiple `x = dead_band + S*/β` (with `S*` clamped at `S_cap`); set **bonus APR = (x − 1)·m** paid only
 on the program's deposits `S`. The depositor plant is `dS/dt = (S*−S)/τ` with the rush
@@ -326,7 +329,7 @@ acceleration on inflow.
 | net-new efficiency | **~56%** (leakage k ≈ 44%, slow channel only) | §6 |
 | rush efficiency | **~100% new** (Δagg/Δpy = 0.99 @ 1 d) | §6 |
 | crvUSD savings premium | **~1%** over USDC (scrvUSD ≈ sUSDS) | §2 |
-| market norm m | Aave USDC, 7-day EMA (≈ sUSDS ≈ scrvUSD) | §2 |
+| market norm m | Aave USDC, 7-day EMA (≈ sUSDS ≈ scrvUSD) — time series in **`aave_rate_smoothed.csv.xz`** (col `aave_apr_ema7d`, raw in `aave_usdc_apr`; built by `smooth_aave.py`) | §2 |
 
 ### The parameters actually used (the found design point)
 
