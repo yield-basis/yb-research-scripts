@@ -192,11 +192,12 @@ point.
 # Measured / fitted constants (see §4, §6, §9)
 DEAD_BAND  = 1.6        # x_hi: LPs only start arriving above ~1.6x the market rate
 BETA       = 0.5        # sink (frac of half-TVL) drawn per unit of offer above the band
-S_CAP      = 22.0       # clamp on the target sink (sets the worst-case offered APR)
+S_CAP      = 22.0       # clamp on the target sink (sets the worst-case offered APR in units of market rate)
 ALPHA      = 1.16       # feed-forward gain on the pressure
 KP, KI, KD = 50.0, 1988.0, 0.0158   # PID gains (P, S in frac of half-TVL; time in YEARS)
 I_MAX      = 2.93       # integral clamp
 RESERVE    = 0.10       # standing YB-funded buffer absorbing the first 10% (frac half-TVL)
+# half-TVL means 50% of Curve pool's TVL, or 100% of YB TVL
 
 I, prev_P, S = 0.0, 0.0, 0.0          # integral accumulator, last pressure, current sink
 
@@ -241,10 +242,9 @@ while True:
 
 ## 8. Combined simulation results
 
-We drive the PID controller (§7) with the **simplified plant** (§4: `fee = 0`, `p_in = 1`,
-band [1.52×, 1.60×], τ_in = 57 d, τ_out = 6.0 d) on the real net-pressure signal, crediting
-the §6 peer-cannibalisation via its **rush-clean** split (slow inflow channel 56% new
-crvUSD, rush channel ~100%). Everything is in fractions of half-TVL, so the results are
+We drive the PID controller (§7) with the **simplified plant** (trading fees of stablecoin
+pools not accounted for) on the real net-pressure signal, crediting
+the §6 peer-cannibalisation. Everything is in fractions of half-TVL (== YB TVL), so the results are
 scale-free. **A high-APR burst fills the spike cheaply** (the §4 rush): the offer spikes
 only during a de-peg, so spend stays tiny while coverage rides the fast, clean rush.
 
@@ -356,19 +356,6 @@ Gains are optimiser outputs (re-tune per deployment); the plant constants are th
 * **Scale-free:** all figures are fractions of half-TVL, so they hold from ~$120M to
   billions; the price is a fraction of TVL and co-scales with the YB-earnings budget that
   funds it.
-
-### Open design points (carry into a combined simulator)
-
-* **Buy vs mint.** The mechanism wants incentivised crvUSD to be **bought** on the open
-  market (pushes crvUSD toward peg). If depositors **mint** fresh crvUSD instead, it
-  raises borrow rate but doesn't relieve the shortfall — steer demand to a buy venue
-  (e.g. a crvUSD/pyUSD pool) rather than raw scrvUSD.
-* **Stickiness.** Mercenary capital that arrives for a high burst APR also leaves fast
-  (τ_out); slowly draining the reserve needs a lock-up/vesting on incentivised deposits.
-* **β and high-APR velocity at scale** are the main unmeasured scales: β sets the *price*
-  (not feasibility), and deposit velocity in the extreme-burst regime (well above the
-  measured campaigns) is a *behavioural* unknown (crvUSD itself is liquid and instantly
-  buyable).
 
 ---
 
