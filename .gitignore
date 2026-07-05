@@ -18,3 +18,6 @@ __pycache__/
 
 # Local env
 .env
+
+# Local-only YFI 2020 investigation (not to be committed)
+yfi/
