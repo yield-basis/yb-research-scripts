@@ -90,6 +90,21 @@
   "leverage": 2000000000000000000
  },
  {
+  "idx": 6,
+  "version": "v2",
+  "symbol": "WETH",
+  "asset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  "decimals": 18,
+  "cryptopool": "0x6e5492F8ea2370844EE098A56DD88e1717e4A9C2",
+  "amm": "0x35095d94E0f1F4a78386B7eB74BB64768A2341e4",
+  "lt": "0x931d40dD07b25B91932b481B63631Ea86d236e09",
+  "price_oracle": "0x84E7F75fF75A0935847D72e1F76Ceb392174EE17",
+  "agg": "0x18672b1b0c623a30089A280Ed9256379fb0E4E62",
+  "staker": "0xe4e656B5215a82009969219b1bAbB7c0757A3315",
+  "created_block": 24184012,
+  "leverage": 2000000000000000000
+ },
+ {
   "idx": 7,
   "version": "v3",
   "symbol": "WBTC",
@@ -132,6 +147,21 @@
   "agg": "0x18672b1b0c623a30089A280Ed9256379fb0E4E62",
   "staker": "0xe83D888FE3213DD3471DE0bC1957E0f94F038483",
   "created_block": 25170802,
+  "leverage": 2000000000000000000
+ },
+ {
+  "idx": 10,
+  "version": "v3",
+  "symbol": "WETH",
+  "asset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  "decimals": 18,
+  "cryptopool": "0x656341Ef90b622c6634e0573772FfB7f3669b9f3",
+  "amm": "0x5f8D24F33Cc5a1D5D1bf012261E6A2214C92233c",
+  "lt": "0x2B9c9f3BdcEb5d8E36a4704F08a78Fca53343cEa",
+  "price_oracle": "0x231C37b8e9D2076d673C5E24eCFcC2a82652E054",
+  "agg": "0x18672b1b0c623a30089A280Ed9256379fb0E4E62",
+  "staker": "0xd829456FD63Ada7DE0657714A3A7A26DE403E3D8",
+  "created_block": 25170804,
   "leverage": 2000000000000000000
  }
 ]

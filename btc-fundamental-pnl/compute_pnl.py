@@ -1,4 +1,8 @@
-"""Fundamental PnL of the YB BTC markets: users + admin together, relative and in BTC.
+"""Fundamental PnL of the YB markets: users + admin together, relative and in the asset.
+
+Groups: "total" and v1/v2/v3 are over the BTC markets only (the BTC "system");
+per-asset groups (WBTC, cbBTC, tBTC, WETH) chain each asset's markets across
+versions; every market also has its own columns (suffix = market index).
 
 Equity of a market at a sampled block (asset units = BTC):
     E_raw  = value_oracle / LT._price_oracle()          (LT's own cur_value)
@@ -11,6 +15,21 @@ Each is the *whole* market: what LT splits into users' liquidity.total and the
 admin's liquidity.admin. (agg = 1 for E_adj: LT prices the LP in USD but the debt
 in crvUSD, so a crvUSD depeg moves its books by ~(1 - agg) * debt / price although
 the position is crvUSD-neutral.)
+
+    E_book = LP at the pool's actual virtual price, at price_scale, crvUSD units
+    E_bal  = what the market would be worth after balancing out at today's price:
+             price_scale walked to the market price in small steps, pool and
+             LEVAMM arbitraged after each, with the fees those trades leave behind
+             (see rebalance.py) -> non-inflated value
+    E_jump = the same with price_scale moved in one jump (pessimistic bound)
+
+Reliable line: equal to the as-designed value whenever a market's pool is
+balanced (price_scale within --dev-threshold, 2%, of its oracle). While it is
+further off, the as-designed measurement is inflated, so that market's value is
+held at max(value when the deviation started, non-inflated value), the
+non-inflated value being E_bal chained from the window start; when the pool is
+back within the threshold the line rejoins the as-designed value. For a group of
+markets the per-market adjustments are equity-weighted.
 
 Admin fee charged: LT._calculate_values is replayed exactly at every sample
 (checked against pricePerShare()), giving the admin's accrued claim; its
@@ -37,6 +56,7 @@ Usage:
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import lzma
@@ -44,8 +64,13 @@ import lzma
 import numpy as np
 import pandas as pd
 
-from yb_common import (DATA, SECONDS_PER_YEAR, WAD, amm_value, lp_price, lt_calculate_values,
-                       realised_vol, vp_floor)
+from rebalance import ann, balance_out, ss_D
+from yb_common import (DATA, SECONDS_PER_YEAR, WAD, amm_value, is_btc, lp_price,
+                       lt_calculate_values, realised_vol, vp_floor)
+
+VALUATIONS = ("adj", "raw", "mkt", "book", "bal", "jump")
+FEE_PRECISION = 10**10  # twocrypto mid_fee / out_fee units
+BALANCE_STEPS = 40      # price_scale walk to the market price (40 vs 80: < 0.05% apart)
 
 ZERO = "0x0000000000000000000000000000000000000000"
 
@@ -56,8 +81,10 @@ def load_markets() -> dict[int, dict]:
 
 def value_rows(states: pd.DataFrame, markets: dict[int, dict]) -> pd.DataFrame:
     """Exact integer valuation and LT admin replay per (block, market) row."""
-    cols = ("e_raw", "e_adj", "e_mkt", "admin", "ok")
+    cols = ("e_raw", "e_adj", "e_mkt", "e_book", "admin", "ok")
     out = {k: [] for k in cols}
+    bal_in = {k: [] for k in ("row", "b0", "b1", "p", "amp", "pool_fee", "supply", "donation",
+                              "vp", "floor", "coll", "debt", "lev", "amm_fee", "ps", "D")}
     n_pps = bad_vo = bad_pps = 0
     for r in states.itertuples(index=False):
         m = markets[r.market]
@@ -82,7 +109,20 @@ def value_rows(states: pd.DataFrame, markets: dict[int, dict]) -> pd.DataFrame:
         out["e_raw"].append(v_raw * WAD // p_lt / WAD)
         out["e_adj"].append(v_adj * WAD // ps / WAD)
         out["e_mkt"].append((coll * lp_mkt // WAD - debt) * WAD // po / WAD)
+        v_book = amm_value(lp_price(vp, ps), coll, debt, m["leverage"])
+        out["e_book"].append(v_book * WAD // ps / WAD)
         out["ok"].append(True)
+
+        if supply and r.cp_A != "" and coll:  # inputs for the rebalanced valuation
+            fee = max(int(r.cp_mid_fee), int(r.cp_out_fee))  # flat in practice (mid == out)
+            for k, v in (("row", len(out["ok"]) - 1), ("b0", b0 / WAD),
+                         ("b1", b1 / 10**m["decimals"]), ("p", po / WAD), ("amp", int(r.cp_A)),
+                         ("pool_fee", fee / FEE_PRECISION), ("supply", supply / WAD),
+                         ("donation", int(r.cp_donation_shares) / WAD), ("vp", vp / WAD),
+                         ("floor", floor / WAD), ("coll", coll / WAD), ("debt", debt / WAD),
+                         ("lev", m["leverage"] / WAD), ("amm_fee", int(r.amm_fee) / WAD),
+                         ("ps", ps / WAD), ("D", int(r.cp_D) / WAD)):
+                bal_in[k].append(v)
 
         # admin's accrued claim, replaying LT._calculate_values at this block
         admin = np.nan
@@ -105,7 +145,24 @@ def value_rows(states: pd.DataFrame, markets: dict[int, dict]) -> pd.DataFrame:
 
     print(f"check: python value != AMM.value_oracle on {bad_vo} rows")
     print(f"check: replayed LT split == LT.pricePerShare on {n_pps - bad_pps:,}/{n_pps:,} rows")
-    return pd.DataFrame(out, index=states.index)
+    df = pd.DataFrame(out, index=states.index)
+
+    # rebalanced (non-inflated) equity, vectorised over all rows at once
+    x = {k: np.asarray(v, dtype=float) for k, v in bal_in.items()}
+    d_now = ss_D(x["b0"], x["b1"] * x["ps"], ann(x["amp"]))
+    err = np.abs(d_now / x["D"] - 1)
+    print(f"check: float stableswap D vs pool.D(): median rel.err {np.median(err):.1e}, "
+          f"99.9% {np.quantile(err, 0.999):.1e}")
+    kw = dict(b0=x["b0"], b1=x["b1"], ps=x["ps"], p=x["p"], amp=x["amp"],
+              pool_fee=x["pool_fee"], supply=x["supply"], donation_shares=x["donation"],
+              vp=x["vp"], vp_floor=x["floor"], coll=x["coll"], debt=x["debt"],
+              leverage=x["lev"], amm_fee=x["amm_fee"])
+    rows = df.index[x["row"].astype(int)]
+    for col, steps in (("e_bal", BALANCE_STEPS), ("e_jump", 1)):
+        df[col] = np.nan
+        df.loc[rows, col] = balance_out(**kw, steps=steps)["e_bal"]
+        df.loc[df["ok"] & df[col].isna(), col] = 0.0  # empty AMM
+    return df
 
 
 def load_events():
@@ -120,7 +177,27 @@ def load_events():
     return flows, admin_resets
 
 
-def per_market(states, markets, flows, admin_resets) -> pd.DataFrame:
+def reliable_factor(r: np.ndarray, r_true: np.ndarray, unreliable: np.ndarray) -> np.ndarray:
+    """Reliable value / as-designed value, per sample.
+
+    1 outside unreliable windows. Inside a window starting after sample k:
+    M_k * max(1, B / B_k) / M, with M the as-designed index (returns r) and B the
+    non-inflated one (returns r_true).
+    """
+    m, b = np.cumprod(1 + r), np.cumprod(1 + r_true)
+    out = np.ones_like(m)
+    anchor = None
+    for i in range(len(r)):
+        if unreliable[i]:
+            if anchor is None:
+                anchor = (m[i - 1], b[i - 1]) if i else (1.0, 1.0)
+            out[i] = anchor[0] * max(1.0, b[i] / anchor[1]) / m[i]
+        else:
+            anchor = None
+    return out
+
+
+def per_market(states, markets, flows, admin_resets, dev_threshold) -> pd.DataFrame:
     """Per (block, market): equity, PnL increment d_*, TWR weight w_*, admin increment."""
     frames = []
     for idx, g in states.groupby("market", sort=True):
@@ -130,7 +207,7 @@ def per_market(states, markets, flows, admin_resets) -> pd.DataFrame:
         is_reset = np.isin(blocks, list(admin_resets.get(idx, ())))
         ok = g["ok"].to_numpy(dtype=bool)
         f = pd.DataFrame({"block": blocks, "market": idx})
-        for v in ("raw", "adj", "mkt"):
+        for v in VALUATIONS:
             e = g[f"e_{v}"].to_numpy()
             prev = np.r_[np.nan, e[:-1]]
             valid = ~is_flow & ok & np.r_[False, ok[:-1]] & (prev > 0)
@@ -143,16 +220,30 @@ def per_market(states, markets, flows, admin_resets) -> pd.DataFrame:
                 # shares (still charged), so only what accrued after counts as new
                 da = np.where(is_reset, a, a - np.r_[np.nan, a[:-1]])
                 f["d_admin"] = np.where(valid & np.isfinite(da), da, 0.0)
+        # reliable value: as designed, but held at max(start, non-inflated) in
+        # windows where this market's pool price_scale is far from its oracle
+        dev = np.nan_to_num((g["price_scale"] / g["price_oracle"] - 1).abs().to_numpy())
+        w_adj, w_bal = f["w_adj"].to_numpy(), f["w_bal"].to_numpy()
+        r = np.divide(f["d_adj"].to_numpy(), w_adj, out=np.zeros_like(w_adj), where=w_adj > 0)
+        r_bal = np.divide(f["d_bal"].to_numpy(), w_bal, out=np.zeros_like(w_bal), where=w_bal > 0)
+        f["rel_factor"] = reliable_factor(r, r_bal, dev > dev_threshold)
         frames.append(f)
         m = markets[idx]
+        unit = "BTC" if is_btc(m["symbol"]) else m["symbol"].removeprefix("W")
         print(f"  [{idx}] {m['version']} {m['symbol']:6s} PnL adj {f.d_adj.sum():+8.3f}  "
-              f"raw {f.d_raw.sum():+8.3f}  mkt {f.d_mkt.sum():+8.3f} BTC   "
-              f"of which admin fee {f.d_admin.sum():+7.3f} BTC   "
+              f"raw {f.d_raw.sum():+8.3f}  mkt {f.d_mkt.sum():+8.3f}  bal {f.d_bal.sum():+8.3f} {unit}   "
+              f"of which admin fee {f.d_admin.sum():+7.3f} {unit}   "
               f"dropped {is_flow.sum():5d} flow blocks")
     return pd.concat(frames)
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dev-threshold", type=float, default=0.02,
+                    help="|price_scale/oracle - 1| above which a market's measurement is "
+                         "treated as unreliable (default 0.02)")
+    args = ap.parse_args()
     markets = load_markets()
     states = pd.read_csv(DATA / "states.csv.xz", dtype=str, keep_default_na=False)
     for c in ("block", "timestamp", "market"):
@@ -164,7 +255,7 @@ def main() -> None:
     states = states.join(value_rows(states, markets))
     for col in ("price_scale", "price_oracle"):
         states[col] = pd.to_numeric(states[col], errors="coerce") / WAD
-    pm = per_market(states, markets, flows, admin_resets)
+    pm = per_market(states, markets, flows, admin_resets, args.dev_threshold)
 
     # ---- wide table on the common block axis
     times = states.groupby("block")["timestamp"].first()
@@ -173,13 +264,19 @@ def main() -> None:
            for c in pm.columns if c[:2] in ("e_", "d_", "w_")}
     for c in piv:
         piv[c] = piv[c].ffill().fillna(0.0) if c.startswith("e_") else piv[c].fillna(0.0)
+    rel_factor = pm.pivot(index="block", columns="market", values="rel_factor")
+    rel_factor = rel_factor.reindex(wide.index).ffill().fillna(1.0)
 
-    groups = {"total": list(markets)}
-    groups |= {v: [i for i in markets if markets[i]["version"] == v] for v in ("v1", "v2", "v3")}
+    btc_markets = [i for i in markets if is_btc(markets[i]["symbol"])]
+    groups = {"total": btc_markets}
+    groups |= {v: [i for i in btc_markets if markets[i]["version"] == v]
+               for v in ("v1", "v2", "v3")}
+    groups |= {sym: [i for i in markets if markets[i]["symbol"] == sym]
+               for sym in sorted({m["symbol"] for m in markets.values()})}
     groups |= {str(i): [i] for i in markets}
     new = {}
     for name, idx in groups.items():
-        for v in ("raw", "adj", "mkt"):
+        for v in VALUATIONS:
             d, w = piv[f"d_{v}"][idx].sum(axis=1), piv[f"w_{v}"][idx].sum(axis=1)
             r = (d / w.where(w > 0)).fillna(0.0)
             new[f"e_{v}_{name}"] = piv[f"e_{v}"][idx].sum(axis=1)
@@ -192,6 +289,13 @@ def main() -> None:
         new[f"admin_{name}"] = d_adm.cumsum()              # BTC charged to admin
         new[f"r_admin_{name}"] = r_adm
         new[f"idx_users_{name}"] = (1 + new[f"r_adj_{name}"] - r_adm).cumprod()
+        # reliable: as-designed index times the equity-weighted per-market adjustment
+        eq = piv["e_adj"][idx]
+        adj = (eq * rel_factor[idx]).sum(axis=1) / eq.sum(axis=1).where(eq.sum(axis=1) > 0)
+        new[f"idx_rel_{name}"] = new[f"idx_adj_{name}"] * adj.fillna(1.0)
+        # latent cost of balancing out now, as a fraction of book equity
+        book = new[f"e_book_{name}"]
+        new[f"bal_cost_{name}"] = (1 - new[f"e_bal_{name}"] / book.where(book > 0)).fillna(0.0)
     wide = pd.concat([wide, pd.DataFrame(new)], axis=1)
 
     # How far each market's pool price_scale sits from its EMA price oracle
@@ -210,6 +314,7 @@ def main() -> None:
     end = w.groupby("month")[["pnl_adj_total", "admin_total"]].last()
     btc = end.diff().fillna(end)
     rows = []
+    prev_rel = 1.0
     for month, g in w.groupby("month", sort=True):
         secs = dt_s.loc[g.index].sum()
         system = np.prod(1 + g["r_adj_total"]) - 1
@@ -221,12 +326,16 @@ def main() -> None:
             "apr_system": system * SECONDS_PER_YEAR / secs if secs else np.nan,
             "return_lt_books": np.prod(1 + g["r_raw_total"]) - 1,
             "return_mkt": np.prod(1 + g["r_mkt_total"]) - 1,
+            "return_rebalanced": np.prod(1 + g["r_bal_total"]) - 1,
+            "return_rebalanced_jump": np.prod(1 + g["r_jump_total"]) - 1,
+            "return_reliable": g["idx_rel_total"].iloc[-1] / prev_rel - 1,
             "pnl_btc": btc.loc[month, "pnl_adj_total"],
             "admin_fee_btc": btc.loc[month, "admin_total"],
             "mean_equity_btc": (g["e_adj_total"] * dt_s.loc[g.index]).sum() / max(secs, 1),
             "btc_usd_end": px.iloc[-1], "btc_return": px.iloc[-1] / px.iloc[0] - 1,
             "realised_vol": realised_vol(px),
         })
+        prev_rel = g["idx_rel_total"].iloc[-1]
     monthly = pd.DataFrame(rows)
     monthly.to_csv(DATA / "monthly.csv", index=False, float_format="%.6g")
 
@@ -237,6 +346,11 @@ def main() -> None:
     print(f"\nRelative, all BTC markets (as designed): system {last.idx_adj_total - 1:+.2%}, "
           f"users {last.idx_users_total - 1:+.2%}, admin fee {last.idx_adj_total - last.idx_users_total:+.2%}"
           f"   [LT books {last.idx_raw_total - 1:+.2%}, mark-to-market {last.idx_mkt_total - 1:+.2%}]")
+    print(f"Reliable (held at max(start, non-inflated) while |ps/oracle-1| > {args.dev_threshold:.0%}): "
+          f"{last.idx_rel_total - 1:+.2%}   Rebalanced (non-inflated): {last.idx_bal_total - 1:+.2%}"
+          f" (one jump: {last.idx_jump_total - 1:+.2%})"
+          f"   [books in crvUSD {last.idx_book_total - 1:+.2%}; latent balancing cost now "
+          f"{last.bal_cost_total:.2%} of equity]")
     print(f"Absolute: system {last.pnl_adj_total:+.3f} BTC, of which admin fee charged "
           f"{last.admin_total:+.3f} BTC")
     print(f"-> {DATA / 'pnl.csv.xz'}, {DATA / 'monthly.csv'}")

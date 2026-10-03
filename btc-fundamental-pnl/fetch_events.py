@@ -1,4 +1,4 @@
-"""Fetch every capital-flow event of the YB BTC markets (v1, v2, v3).
+"""Fetch every capital-flow event of the YB markets (BTC v1/v2/v3 and WETH).
 
 A "flow" is anything that changes an AMM's collateral/debt other than trading:
     AMM.AddLiquidityRaw     <- LT.deposit
@@ -30,8 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 import eth_abi
 from tqdm import tqdm
 
-from yb_common import (DATA, LOGS_RANGE, RPC_BATCH, btc_markets, fetch_multi_retry,
-                       head_block, topic)
+from yb_common import (DATA, LOGS_RANGE, RPC_BATCH, fetch_multi_retry, head_block, topic,
+                       yb_markets)
 
 EVENTS = {
     topic("AddLiquidityRaw(uint256[2],uint256,uint256)"): ("amm", "AddLiquidityRaw"),
@@ -61,7 +61,7 @@ def main() -> None:
     ap.add_argument("--end-block", type=int, default=None)
     args = ap.parse_args()
 
-    markets = btc_markets()
+    markets = yb_markets()
     end = args.end_block or head_block()
     start = min(m.created_block for m in markets)
     by_addr = {}

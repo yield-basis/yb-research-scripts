@@ -1,4 +1,4 @@
-"""Sample on-chain state of all YB BTC markets at a block grid + flow boundaries.
+"""Sample on-chain state of all YB markets at a block grid + flow boundaries.
 
 Sampled blocks:
     * a regular grid every --stride blocks (default 150 ≈ 30 min) for plotting
@@ -8,11 +8,12 @@ Sampled blocks:
 
 Each sampled block is ONE eth_call to Multicall3.aggregate3 bundling, for every
 market already created at that block:
-    AMM:  collateral_amount, get_debt, value_oracle
+    AMM:  collateral_amount, get_debt, value_oracle, fee
     LT:   liquidity (admin, total, ideal_staked, staked), totalSupply,
           staker, balanceOf(staker), min_admin_fee, pricePerShare
     pool: price_scale, price_oracle, last_prices, virtual_price, xcp_profit,
-          lp_xcp_profit (v3 only), totalSupply, balances(0/1), donation_shares
+          lp_xcp_profit (v3 only), totalSupply, balances(0/1), donation_shares,
+          D, A, gamma, mid_fee, out_fee, fee_gamma
                                                       (deduplicated: v1/v2 share pools)
     agg:  price                                       (deduplicated)
     Chainlink BTC/USD latestAnswer                    (external BTC price, for volatility)
@@ -38,8 +39,8 @@ from dataclasses import asdict
 import eth_abi
 from tqdm import tqdm
 
-from yb_common import (CHAINLINK_BTCUSD, DATA, MC3, RPC_BATCH, btc_markets, eth_call,
-                       fetch_multi_retry, head_block, selector)
+from yb_common import (CHAINLINK_BTCUSD, DATA, MC3, RPC_BATCH, eth_call, fetch_multi_retry,
+                       head_block, selector, yb_markets)
 
 MARKET_CALLS = [  # (contract attr, signature, output types, column names, arg attr)
     ("amm", "collateral_amount()", ["uint256"], ["collateral"], None),
@@ -52,6 +53,7 @@ MARKET_CALLS = [  # (contract attr, signature, output types, column names, arg a
     ("lt", "balanceOf(address)", ["uint256"], ["lt_staked_tokens"], "staker"),
     ("lt", "min_admin_fee()", ["uint256"], ["min_admin_fee"], None),
     ("lt", "pricePerShare()", ["uint256"], ["lt_pps"], None),
+    ("amm", "fee()", ["uint256"], ["amm_fee"], None),
 ]
 POOL_CALLS = [
     ("price_scale()", "price_scale"),
@@ -63,6 +65,12 @@ POOL_CALLS = [
     ("balances(uint256)", "cp_balance0"),
     ("balances(uint256)", "cp_balance1"),
     ("donation_shares()", "cp_donation_shares"),
+    ("D()", "cp_D"),
+    ("A()", "cp_A"),
+    ("gamma()", "cp_gamma"),
+    ("mid_fee()", "cp_mid_fee"),
+    ("out_fee()", "cp_out_fee"),
+    ("fee_gamma()", "cp_fee_gamma"),
 ]
 V3_POOL_CALLS = [("lp_xcp_profit()", "lp_xcp_profit")]
 
@@ -127,7 +135,7 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=16)
     args = ap.parse_args()
 
-    markets = btc_markets()
+    markets = yb_markets()
     with lzma.open(DATA / "events.csv.xz", "rt") as fh:
         flow_blocks = {int(r["block"]) for r in csv.DictReader(fh)
                        if r["contract"] == "amm" or r["event"] == "WithdrawAdminFees"}

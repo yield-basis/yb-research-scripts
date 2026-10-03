@@ -1,12 +1,14 @@
-"""Shared helpers for the BTC fundamental-PnL study.
+"""Shared helpers for the YB fundamental-PnL study (BTC markets, plus WETH per asset).
 
 Markets (Factory 0x370a…00c0, all on mainnet):
 
     v1   0 WBTC   1 cbBTC   2 tBTC    twocrypto v2.1.0d pools, LT values at price_oracle
     v2   3 WBTC   4 cbBTC   5 tBTC    SAME cryptopools as v1, LT values at price_scale
-    --   6 WETH                       (not BTC, excluded)
+    v2   6 WETH                       v2 LT/AMM code, its own v2.1.0d pool
     v3   7 WBTC   8 cbBTC   9 tBTC    new twocrypto v3.0.0 pools (reserved_profit_fraction)
-    --  10 WETH                       (not BTC, excluded)
+    v3  10 WETH                       v3 code
+
+The "system" totals are over the BTC markets only; WETH is reported per asset.
 
 Valuation ("pools working as designed")
 ---------------------------------------
@@ -55,9 +57,9 @@ MC3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
 CHAINLINK_BTCUSD = "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c"  # 8 decimals
 
 VERSIONS = {0: "v1", 1: "v1", 2: "v1",
-            3: "v2", 4: "v2", 5: "v2",
-            7: "v3", 8: "v3", 9: "v3"}
-BTC_MARKETS = sorted(VERSIONS)
+            3: "v2", 4: "v2", 5: "v2", 6: "v2",
+            7: "v3", 8: "v3", 9: "v3", 10: "v3"}
+MARKETS = sorted(VERSIONS)
 
 LOGS_RANGE = 10_000   # node: eth_getLogs block range limit
 RPC_BATCH = 100       # node: --rpc.batch.limit
@@ -156,16 +158,19 @@ def creation_blocks() -> dict[int, int]:
     return out
 
 
+def is_btc(symbol: str) -> bool:
+    return "BTC" in symbol
+
+
 @cache
-def btc_markets() -> list[Market]:
+def yb_markets() -> list[Market]:
     created = creation_blocks()
     markets = []
-    for i in BTC_MARKETS:
+    for i in MARKETS:
         m = eth_call(FACTORY, "markets(uint256)", ["uint256"], [i],
                      out=["(address,address,address,address,address,address,address)"])
         asset, cp, amm, lt, oracle, _vpool, staker = (to_checksum_address(a) for a in m)
         symbol = eth_call(asset, "symbol()", out=["string"])
-        assert "BTC" in symbol, (i, symbol)
         decimals = eth_call(asset, "decimals()")
         agg = to_checksum_address(eth_call(oracle, "AGG()", out=["address"]))
         markets.append(Market(i, VERSIONS[i], symbol, asset, decimals, cp, amm, lt, oracle, agg,
