@@ -7,3 +7,4 @@ chainlink/*.xz filter=lfs diff=lfs merge=lfs -text
 rates/*.xz filter=lfs diff=lfs merge=lfs -text
 rates/btc-candidates-yb-opt/**/*.xz filter=lfs diff=lfs merge=lfs -text
 rates/btc-candidates-yb-opt/**/*.png filter=lfs diff=lfs merge=lfs -text
+btc-fundamental-pnl/data/*.xz filter=lfs diff=lfs merge=lfs -text

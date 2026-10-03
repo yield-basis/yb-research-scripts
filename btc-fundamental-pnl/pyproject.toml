@@ -1,0 +1,16 @@
+[project]
+name = "btc-fundamental-pnl"
+version = "0.1.0"
+description = "Fundamental (users + admin) PnL of Yield Basis BTC markets across v1/v2/v3, valued as if the cryptopools worked as designed"
+requires-python = ">=3.12"
+dependencies = [
+    "titanoboa>=0.2.8",
+    "python-dotenv>=1.2.2",
+    "eth-abi>=5.0.0",
+    "eth-utils>=5.0.0",
+    "tqdm>=4.67.3",
+    "numpy>=2.0",
+    "pandas>=2.3",
+    "matplotlib>=3.10",
+    "pyqt6>=6.11.0",
+]
