@@ -45,8 +45,11 @@ uv run python validate.py          # boa fork cross-check (optional)
   held at max(value at the start of the deviation, non-inflated value), with
   the non-inflated value chained from the start of the deviation. Once the
   pool is back within 2%, the line rejoins the as-designed value; losses or
-  gains realised during the window show up at that point. For a group of
-  markets, the per-market adjustments are equity-weighted.
+  gains realised during the window show up at that point. A group's line
+  chains its markets' reliable returns, weighted by reliable equity. It equals
+  the as-designed line when no pool was off, and it keeps the haircut on equity
+  that left while its pool was off, since those withdrawals got the
+  non-inflated value.
 * **Balanced out (non-inflated)**, in `rebalance.py`: the value if the system
   were balanced out at the current market price. `price_scale` walks to the
   market price in 40 steps. After each step, arbitrage brings the pool back
@@ -67,7 +70,7 @@ uv run python validate.py          # boa fork cross-check (optional)
 
 | file | content |
 |---|---|
-| `btc_relative_pnl` | all BTC markets: system (as designed) and reliable lines only |
+| `btc_relative_pnl` | all BTC markets: system (as designed) and reliable lines only, on pale zones showing which version held most TVL |
 | `wbtc_ / cbbtc_ / tbtc_ / weth_relative_pnl` | the same per asset, chaining that asset's markets across versions |
 | `btc_fundamental_pnl` | relative PnL: system vs users' part (gap = admin fee) + reliable dashed line; non-inflated (balanced-out) value; same in BTC; BTC price; weekly APR; realised vol |
 | `btc_pnl_valuations` | relative PnL under every valuation; latent cost of balancing out; `price_scale` lag of each pool |

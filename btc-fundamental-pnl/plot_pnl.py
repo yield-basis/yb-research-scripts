@@ -46,6 +46,15 @@ MKT = "#4a3aa7"                  # mark-to-market valuation (slot 7, distinct fr
 BAL, BAL_LIGHT = "#4a3aa7", "#9085e9"   # balanced out (gradual) / its latent-cost fill
 SHADE = "#f0efec"                # neutral: periods when the measurement is unreliable
 
+
+def tint(color, alpha=0.14, base=SURFACE):
+    """Pale version of `color`: alpha-blend over the chart surface."""
+    c, b = (np.array([int(h[i:i + 2], 16) for i in (1, 3, 5)]) for h in (color, base))
+    return "#" + "".join(f"{int(round(v)):02x}" for v in alpha * c + (1 - alpha) * b)
+
+
+VERSION_TINT = {v: tint(c) for v, c in VERSION_COLOR.items()}
+
 plt.rcParams.update({
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
     "axes.edgecolor": AXIS, "axes.linewidth": 0.8, "axes.labelcolor": INK2,
@@ -311,12 +320,30 @@ def fig_valuations(markets, w):
     return fig
 
 
+def version_zones(w, markets):
+    """[(start, end, version)] spans where `version` holds most of the group's equity."""
+    versions = sorted({m["version"] for m in markets.values()})
+    eq = pd.DataFrame({v: sum(w[f"e_adj_{i}"] for i, m in markets.items() if m["version"] == v)
+                       for v in versions})
+    dom = eq.idxmax(axis=1).where(eq.sum(axis=1) > 0)
+    change = dom.ne(dom.shift()).to_numpy()
+    starts = np.flatnonzero(change)
+    ends = np.r_[starts[1:], len(dom)] - 1
+    return [(w.index[a], w.index[b], dom.iloc[a]) for a, b in zip(starts, ends)
+            if isinstance(dom.iloc[a], str)]
+
+
 def fig_relative(w, markets, group, unit, title, name, threshold):
     """One panel: relative PnL of a group of markets, system and reliable lines only."""
     live = w[f"e_adj_{group}"] > 0
     w = w.loc[w.index >= w.index[live.to_numpy().argmax()]]
     system, reliable = pct(w[f"idx_adj_{group}"]), pct(w[f"idx_rel_{group}"])
     fig, ax = plt.subplots(figsize=(11, 5))
+    labelled = set()
+    for a, b, v in version_zones(w, markets):
+        ax.axvspan(a, b, color=VERSION_TINT[v], lw=0, zorder=0,
+                   label=None if v in labelled else f"most TVL in {v}")
+        labelled.add(v)
     ax.plot(w.index, system, color=INK, lw=2.0,
             label="system = users + admin fee, pools as designed")
     ax.plot(w.index, reliable, color=INK, lw=1.4, ls=(0, (4, 2.5)),
@@ -333,7 +360,12 @@ def fig_relative(w, markets, group, unit, title, name, threshold):
                     xytext=(3, -2), textcoords="offset points", va="top", color=MUTED, fontsize=8)
     ax.set_title(f"Relative fundamental PnL: {title}")
     ax.set_ylabel(f"cumulative return, % of {unit} equity")
-    ax.legend(loc="upper left", bbox_to_anchor=(0, 0.93), fontsize=8.5)
+    handles, labels = ax.get_legend_handles_labels()
+    order = [i for i, lab in enumerate(labels) if not lab.startswith("most TVL")]
+    order += sorted((i for i in range(len(labels)) if i not in order), key=lambda i: labels[i])
+    ax.legend([handles[i] for i in order], [labels[i] for i in order],
+              loc="upper left", bbox_to_anchor=(0, 0.93), fontsize=8.5, ncol=2,
+              frameon=True, facecolor=SURFACE, edgecolor=GRID, framealpha=1)
     lo, hi = min(system.min(), reliable.min(), 0), max(system.max(), reliable.max())
     ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.45 * (hi - lo))  # headroom for the legend
     ax.xaxis.set_major_locator(mdates.MonthLocator())
