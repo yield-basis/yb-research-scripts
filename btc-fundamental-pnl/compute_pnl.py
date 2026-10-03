@@ -29,9 +29,10 @@ further off, the as-designed measurement is inflated, so that market's value is
 held at max(value when the deviation started, non-inflated value), the
 non-inflated value being E_bal chained from the window start; when the pool is
 back within the threshold the line rejoins the as-designed value. A group's line
-chains its markets' reliable returns weighted by reliable equity, so it equals
-the as-designed line when no pool was off, and keeps the haircut on equity that
-left while its pool was off (those withdrawals got the non-inflated value).
+is its as-designed index times the equity-weighted average of its markets'
+factors (reliable / as-designed value): no path dependence, equal to the
+as-designed line whenever every pool is balanced, and always between its
+markets' own lines.
 
 Admin fee charged: LT._calculate_values is replayed exactly at every sample
 (checked against pricePerShare()), giving the admin's accrued claim; its
@@ -268,12 +269,6 @@ def main() -> None:
         piv[c] = piv[c].ffill().fillna(0.0) if c.startswith("e_") else piv[c].fillna(0.0)
     rel_factor = pm.pivot(index="block", columns="market", values="rel_factor")
     rel_factor = rel_factor.reindex(wide.index).ffill().fillna(1.0)
-    # per-market reliable index R = as-designed index * factor, its returns, and the
-    # reliable equity at the start of each interval (weights for group aggregation)
-    r_mkt = (piv["d_adj"] / piv["w_adj"].where(piv["w_adj"] > 0)).fillna(0.0)
-    r_rel = (1 + r_mkt).cumprod() * rel_factor
-    r_rel = (r_rel / r_rel.shift() - 1).fillna(0.0)
-    u_rel = (piv["e_adj"] * rel_factor).shift().fillna(0.0)
 
     btc_markets = [i for i in markets if is_btc(markets[i]["symbol"])]
     groups = {"total": btc_markets}
@@ -297,10 +292,11 @@ def main() -> None:
         new[f"admin_{name}"] = d_adm.cumsum()              # BTC charged to admin
         new[f"r_admin_{name}"] = r_adm
         new[f"idx_users_{name}"] = (1 + new[f"r_adj_{name}"] - r_adm).cumprod()
-        # reliable: chained per-market reliable returns, weighted by reliable equity
-        u = u_rel[idx].sum(axis=1)
-        r = (u_rel[idx] * r_rel[idx]).sum(axis=1) / u.where(u > 0)
-        new[f"idx_rel_{name}"] = (1 + r.fillna(0.0)).cumprod()
+        # reliable: as-designed index * equity-weighted average market factor
+        eq = piv["e_adj"][idx]
+        total_eq = eq.sum(axis=1)
+        avg = (eq * rel_factor[idx]).sum(axis=1) / total_eq.where(total_eq > 0)
+        new[f"idx_rel_{name}"] = new[f"idx_adj_{name}"] * avg.fillna(1.0)
         # latent cost of balancing out now, as a fraction of book equity
         book = new[f"e_book_{name}"]
         new[f"bal_cost_{name}"] = (1 - new[f"e_bal_{name}"] / book.where(book > 0)).fillna(0.0)

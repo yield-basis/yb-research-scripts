@@ -45,11 +45,11 @@ uv run python validate.py          # boa fork cross-check (optional)
   held at max(value at the start of the deviation, non-inflated value), with
   the non-inflated value chained from the start of the deviation. Once the
   pool is back within 2%, the line rejoins the as-designed value; losses or
-  gains realised during the window show up at that point. A group's line
-  chains its markets' reliable returns, weighted by reliable equity. It equals
-  the as-designed line when no pool was off, and it keeps the haircut on equity
-  that left while its pool was off, since those withdrawals got the
-  non-inflated value.
+  gains realised during the window show up at that point. A group's line is
+  its as-designed index times the equity-weighted average of its markets'
+  factors (reliable value / as-designed value). It has no path dependence,
+  equals the solid line whenever every pool is balanced, and always lies
+  between its markets' own lines.
 * **Balanced out (non-inflated)**, in `rebalance.py`: the value if the system
   were balanced out at the current market price. `price_scale` walks to the
   market price in 40 steps. After each step, arbitrage brings the pool back
