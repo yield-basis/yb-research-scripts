@@ -68,6 +68,24 @@ EXCLUDED_WALLETS = [
 ]
 EXCLUDED_WALLETS = [a.lower() for a in EXCLUDED_WALLETS]
 
+# HybridVaults (yb-core contracts/HybridVault.vy) hold LT / gauge shares, claim
+# YB and deposit / withdraw in their own name for one owner each, set once at
+# creation (HybridVaultFactory.create_vault: one vault per owner). PnL belongs
+# to the owner: every script maps a vault address to its owner (see
+# hybrid_vault_owners) before attributing anything.
+HYBRID_VAULT_FACTORY = "0xBdC32268851C324c6185809271dfe6d8dab8dC5b"
+MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
+_AGGREGATE3_ABI = [{
+    "name": "aggregate3", "type": "function", "stateMutability": "payable",
+    "inputs": [{"name": "calls", "type": "tuple[]", "components": [
+        {"name": "target", "type": "address"},
+        {"name": "allowFailure", "type": "bool"},
+        {"name": "callData", "type": "bytes"}]}],
+    "outputs": [{"name": "returnData", "type": "tuple[]", "components": [
+        {"name": "success", "type": "bool"},
+        {"name": "returnData", "type": "bytes"}]}],
+}]
+
 FACTORY_ABI = [
     {
         "name": "market_count",
@@ -189,6 +207,35 @@ def all_markets() -> list[Market]:
 def fee_receiver() -> str:
     """Address that receives YB protocol fees (FeeDistributor)."""
     return factory().functions.fee_receiver().call()
+
+
+def _vault_factory_lookup(fn_sig: str, addresses, block) -> dict[str, str]:
+    """{address: non-zero result of HybridVaultFactory.<fn_sig>(address)}, all
+    lowercase, batched 1000 per Multicall3 call."""
+    selector = Web3.keccak(text=fn_sig)[:4]
+    mc = w3().eth.contract(address=MULTICALL3, abi=_AGGREGATE3_ABI)
+    addrs = sorted({a.lower() for a in addresses})
+    out = {}
+    for i in range(0, len(addrs), 1000):
+        chunk = addrs[i:i + 1000]
+        calls = [(HYBRID_VAULT_FACTORY, True, selector + bytes.fromhex(a[2:].rjust(64, "0")))
+                 for a in chunk]
+        # Before the factory existed the calls return no data: nothing found
+        for a, (ok, ret) in zip(chunk, mc.functions.aggregate3(calls).call(
+                block_identifier=block)):
+            if ok and len(ret) == 32 and int.from_bytes(ret, "big"):
+                out[a] = "0x" + ret[-20:].hex()
+    return out
+
+
+def hybrid_vault_owners(addresses, block="latest") -> dict[str, str]:
+    """{vault: owner} for those of `addresses` that are HybridVaults."""
+    return _vault_factory_lookup("vault_to_user(address)", addresses, block)
+
+
+def hybrid_vaults_of(addresses, block="latest") -> dict[str, str]:
+    """{owner: vault} for those of `addresses` that own a HybridVault."""
+    return _vault_factory_lookup("user_to_vault(address)", addresses, block)
 
 
 @cache

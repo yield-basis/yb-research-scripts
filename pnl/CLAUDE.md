@@ -23,7 +23,10 @@ The scripts form a DAG, not a single entry point. The usual order:
 1. `scripts/all_users_pnl.py --entry-exit` (no markets = all) →
    `pnl_all_users.csv` (events + PPS samples → per-(user, market) PnL
    spreadsheet over the window from `WINDOW_START`; writes `cache/`;
-   `--entry-exit` adds the entry/exit cost columns)
+   `--entry-exit` adds the entry/exit cost columns) and
+   `pnl_per_address_usd.csv` (one row per address, all markets in USD, with
+   the as-of block; use `net_pnl_after_entry_exit_usd`). Re-running it is the
+   refresh: it goes to the finalized head and only fetches what's new (~1 min).
 2. `scripts/classify_users.py` → `pnl_all_users_classified.csv`
    (adds `addr_type` + `has_rescue` for each address)
 3. `scripts/btc_time_integral.py` → `btc_time_integral.csv`
@@ -35,7 +38,8 @@ The scripts form a DAG, not a single entry point. The usual order:
    `--after-entry-exit` for net PnL after entry/exit costs, `--pps` /
    `--redeem` for a pure view, `--by-market` per (market, user))
 6. `scripts/debug_user.py` / `debug_user_pps.py` — single-user drill-down,
-   no cache needed.
+   no cache needed (whole history from deploy, no entry/exit costs or pending
+   YB; `net_pnl_redem` / `net_pnl_pps` of a v2/v3 row should match).
 
 `bench_rpc.py` is a standalone RPC-transport benchmark — not part of the
 pipeline.
@@ -60,6 +64,15 @@ Required env vars (see `.env.example`):
   `factory.fee_receiver()`, `ZERO_ADDR`, and `EXCLUDED_WALLETS` (defined in
   `yb.py`). When adding a new aggregation script, apply the same filter or
   totals will be inflated by non-user contracts.
+- **HybridVaults belong to their owners.** A HybridVault (yb-core
+  `contracts/HybridVault.vy`, factory `HYBRID_VAULT_FACTORY` in `yb.py`, one
+  vault per owner, owner fixed at creation) holds LT / gauge shares, claims
+  YB to itself and deposits / withdraws in its own name. Every script maps a
+  vault to its owner via `yb.hybrid_vault_owners()` (factory `vault_to_user`
+  through Multicall3) before attributing anything, so the owner's row merges
+  the vault with what the owner holds directly; claimable YB is queried for
+  both addresses; `hybrid_vault` column names the vault. New aggregation
+  scripts must do the same. The vault's scrvUSD side is not counted.
 - **`EXCLUDED_WALLETS`.** Contracts holding LT that cannot rescue ERC20s
   (no `rescueERC20` / `sweep` / etc. — see `classify_users.py`'s
   `RESCUE_SIGS`). Any YB sent to them is unrecoverable, so excluding them
@@ -78,6 +91,13 @@ Required env vars (see `.env.example`):
   books at the pool's EMA oracle, so its pricePerShare runs far above what a
   withdrawal pays when price_scale lags (1.44 vs 0.89 on 2026-02-06). `net_pnl`
   = redemption for v1, pricePerShare for v2/v3.
+- **USD.** `*_usd` columns value each gain or loss at the asset's crvUSD
+  price (the market pool's `price_oracle`, already sampled per block) when it
+  happened: PnL between consecutive sampled blocks of any market is priced at
+  the end of the step; YB at its crvUSD value when received. It is the
+  native-asset PnL (vs. holding the asset) in USD, not USD PnL including the
+  asset's own move. The run also prints the total with native PnL at
+  end-block prices, for comparison.
 - **Entry/exit costs (`--entry-exit`).** Positions are marked at the sampled
   price after every balance change, so what a user paid above the mark on
   deposit, or got below it on withdrawal (mostly the pool fee on imbalanced
@@ -88,6 +108,15 @@ Required env vars (see `.env.example`):
   `distribute_borrower_fees` and exit without a Withdraw event (LT
   topic 0x5bdcb9af is DistributeBorrowerFees, not an exit). An actual v1
   withdrawal (19.8656 cbBTC) matched its redemption mark (19.8653).
+  Routers: when the owner's own LT + gauge position doesn't move in the
+  transaction (StakeZap `0xe862…1ec6` mints LT and stakes it in the gauge for the
+  user, or withdraws and sends the user the assets), the event goes pro rata
+  to the addresses whose position did move, from the receipt
+  (`cache/receipts_<markets>.pkl`). Before this, $640k of the $1.07M of costs
+  sat on routers. With costs included, PnL depends only on the marks at the
+  window's ends (where pricePerShare and redemption agree within ~1% for
+  v2/v3), which matters because **v2 pricePerShare also overshot redemption
+  in the Feb 2026 lag** (a 10.556 cbBTC withdrawal marked at 12.52).
 - **Fetch speed.** `all_users_pnl.py` asks for `LOGS_CHUNK` (default 10000)
   blocks per eth_getLogs and runs 8 POSTs in parallel, also for state
   sampling; set `LOGS_CHUNK=1000` on public RPCs that cap the range. Failed
@@ -98,7 +127,10 @@ Required env vars (see `.env.example`):
   When adding a new sampled metric, fold it into the existing multicall in
   `all_users_pnl.py` rather than adding a separate per-block RPC.
 - **Caches are append-friendly.** `all_users_pnl.py` writes
-  `events_<markets>_to_<block>.pkl` and `pps_<markets>_to_<block>.pkl`.
+  `events_<markets>_to_<block>.pkl`, `pps_…`, `flows_…_from_<start>_to_…`
+  and `pending_yb_…`. With no `--end-block` it runs to the *finalized* head
+  (cached logs must never reorg), loads the newest cache with the same market
+  set, fetches only blocks after it, and deletes the file it supersedes.
   Downstream scripts (e.g. `btc_time_integral.py`) read whichever file
   matches their market set and may extend the PPS cache with a single
   additional block — keep this contract intact.

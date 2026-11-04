@@ -4,12 +4,16 @@ For one user in one market, the script fetches:
   - LT.Deposit / LT.Withdraw filtered to the user as `owner`
   - LT.Transfer filtered to user as sender or receiver
   - Gauge.Transfer filtered to user as sender or receiver
-via direct eth_getLogs in 1000-block chunks, then samples PPS
+via direct eth_getLogs in LOGS_CHUNK-block chunks (default 10000), then samples PPS
 (preview_withdraw + convertToAssets) at every balance-change block via
 Multicall3 — one RPC per block instead of two.
 
 Brownie-style integrated PnL: PnL = ∫ balance × dPPS for both LT and gauge,
 discretized over the trajectory of balance changes.
+
+A HybridVault's position is its owner's: given an owner, the script follows
+the owner's address and its vault's together (transfers between the two are
+internal); given a vault, it switches to the owner.
 
 Usage:
     uv run python scripts/debug_user.py 0xUSER MARKET_IDX [N_BLOCKS]
@@ -26,7 +30,8 @@ from eth_abi import decode as abi_decode
 from web3 import Web3
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from yb import all_markets, market_deploy_block, w3  # noqa: E402
+from yb import (  # noqa: E402
+    all_markets, hybrid_vault_owners, hybrid_vaults_of, market_deploy_block, w3)
 
 load_dotenv()
 
@@ -87,7 +92,7 @@ POOL_ABI = [{"name": "price_oracle", "type": "function", "stateMutability": "vie
              "inputs": [], "outputs": [{"type": "uint256"}]}]
 
 PROBE_LT = 10**15
-CHUNK = 1000
+CHUNK = int(os.environ.get("LOGS_CHUNK", "10000"))  # as in all_users_pnl.py
 
 
 def _log(msg: str) -> None:
@@ -158,6 +163,12 @@ def main() -> None:
 
     client = w3()
     end_block = client.eth.block_number
+    owner = hybrid_vault_owners([user], end_block).get(user)
+    if owner:
+        print(f"{user} is a HybridVault: following its owner {owner}")
+        user = owner
+    vault = hybrid_vaults_of([user], end_block).get(user)
+    addrs = [user, *([vault] if vault else [])]
 
     market = next(m for m in all_markets() if m.idx == market_idx)
     if len(sys.argv) > 3:
@@ -170,7 +181,7 @@ def main() -> None:
     decimals = token.functions.decimals().call()
     btc_scale = 10 ** decimals
 
-    print(f"User:   {user}")
+    print(f"User:   {user}" + (f" (+ HybridVault {vault})" if vault else ""))
     print(f"Market: [{market_idx}] {sym}")
     print(f"  LT:    {market.lt}")
     print(f"  Gauge: {market.staker}")
@@ -178,7 +189,7 @@ def main() -> None:
     print(f"  block range: {start_block}..{end_block} ({end_block - start_block:,} blocks)")
     print()
 
-    user_topic = topic_addr(user)
+    user_topic = [topic_addr(a) for a in addrs]  # OR: the user or its vault
     lt_addr = Web3.to_checksum_address(market.lt)
     gauge_addr = Web3.to_checksum_address(market.staker)
 
@@ -226,11 +237,14 @@ def main() -> None:
                      "counter": topic_to_addr(d["indexed"][1])})
         deltas.append((d["block"], d["log_index"], -shares, 0))
 
+    wd_txs = {lg["transactionHash"] for lg in wds_owner}
     for lg in lt_t_from:
         d = decode_log(lg, indexed_count=2, value_types=["uint256"])
         sender, receiver = d["indexed"]
-        if int(sender, 16) == 0:
-            continue  # mint = Deposit, already handled
+        if int(receiver, 16) == 0 and lg["transactionHash"] in wd_txs:
+            continue  # burn = Withdraw, already handled
+        if topic_to_addr(receiver) in addrs:
+            continue  # between the owner and its vault
         value = d["values"][0]
         rows.append({"block": d["block"], "log": d["log_index"], "kind": "LT.Transfer (sent)",
                      "btc_in": 0.0, "lt_delta": -value / 1e18,
@@ -240,7 +254,7 @@ def main() -> None:
     for lg in lt_t_to:
         d = decode_log(lg, indexed_count=2, value_types=["uint256"])
         sender, _ = d["indexed"]
-        if int(sender, 16) == 0:
+        if int(sender, 16) == 0 or topic_to_addr(sender) in addrs:
             continue
         value = d["values"][0]
         rows.append({"block": d["block"], "log": d["log_index"], "kind": "LT.Transfer (recv)",
@@ -251,7 +265,7 @@ def main() -> None:
     for lg in g_t_from:
         d = decode_log(lg, indexed_count=2, value_types=["uint256"])
         sender, receiver = d["indexed"]
-        if int(sender, 16) == 0:
+        if int(sender, 16) == 0 or topic_to_addr(receiver) in addrs:
             continue
         value = d["values"][0]
         rows.append({"block": d["block"], "log": d["log_index"], "kind": "Gauge.Transfer (sent)",
@@ -265,6 +279,8 @@ def main() -> None:
         sender, _ = d["indexed"]
         # Gauge mint to user (sender=0x0) IS a balance change to track —
         # there's no Deposit event on the gauge for this user.
+        if topic_to_addr(sender) in addrs:
+            continue  # between the owner and its vault
         value = d["values"][0]
         rows.append({"block": d["block"], "log": d["log_index"], "kind": "Gauge.Transfer (recv)",
                      "btc_in": 0.0, "lt_delta": 0.0,
@@ -292,12 +308,13 @@ def main() -> None:
     lt = client.eth.contract(address=lt_addr, abi=LT_ABI)
     gauge = client.eth.contract(address=gauge_addr, abi=GAUGE_ABI)
     mc3 = client.eth.contract(address=MULTICALL3, abi=MULTICALL3_ABI)
-    user_addr = client.to_checksum_address(user)
 
     pw_calldata = lt.functions.preview_withdraw(PROBE_LT)._encode_transaction_data()
     cta_calldata = gauge.functions.convertToAssets(PROBE_LT)._encode_transaction_data()
-    bal_lt_calldata = lt.functions.balanceOf(user_addr)._encode_transaction_data()
-    bal_g_calldata = gauge.functions.balanceOf(user_addr)._encode_transaction_data()
+    # (LT, gauge) balanceOf for the user and its vault, summed by balances()
+    bal_calls = [call for a in addrs for call in (
+        (lt_addr, lt.functions.balanceOf(client.to_checksum_address(a))._encode_transaction_data()),
+        (gauge_addr, gauge.functions.balanceOf(client.to_checksum_address(a))._encode_transaction_data()))]
 
     def multicall_at(block, calls):
         """calls: list of (address, calldata). Returns list of (success, bytes).
@@ -307,17 +324,17 @@ def main() -> None:
         results = mc3.functions.aggregate3(agg_calls).call(block_identifier=block)
         return results
 
+    def balances(block):
+        """(LT, gauge) balances of the user and its vault together at block."""
+        rets = [int.from_bytes(r, "big") if ok else 0 for ok, r in multicall_at(block, bal_calls)]
+        return sum(rets[0::2]), sum(rets[1::2])
+
     # Starting balances at start_block (zero if contracts didn't exist).
     _log("Querying starting balances at start_block via Multicall3...")
     if client.eth.get_code(lt_addr, block_identifier=start_block) == b"":
         lt_start, g_start = 0, 0
     else:
-        rets = multicall_at(start_block, [
-            (lt_addr, bal_lt_calldata),
-            (gauge_addr, bal_g_calldata),
-        ])
-        lt_start = int.from_bytes(rets[0][1], "big") if rets[0][0] else 0
-        g_start = int.from_bytes(rets[1][1], "big") if rets[1][0] else 0
+        lt_start, g_start = balances(start_block)
     print(f"Starting balances at block {start_block}: "
           f"LT={lt_start / 1e18:.6f}, Gauge={g_start / 1e18:.6f}")
     if lt_start != 0 or g_start != 0:
@@ -335,12 +352,7 @@ def main() -> None:
     trajectory.append((end_block, lt_run, g_run))
 
     # Sanity-check final balances.
-    rets = multicall_at(end_block, [
-        (lt_addr, bal_lt_calldata),
-        (gauge_addr, bal_g_calldata),
-    ])
-    cur_lt_atomic = int.from_bytes(rets[0][1], "big") if rets[0][0] else 0
-    cur_g_atomic = int.from_bytes(rets[1][1], "big") if rets[1][0] else 0
+    cur_lt_atomic, cur_g_atomic = balances(end_block)
     print(f"\nPredicted final balances:  LT={lt_run / 1e18:.6f}, "
           f"Gauge={g_run / 1e18:.6f}")
     print(f"On-chain final balances:   LT={cur_lt_atomic / 1e18:.6f}, "

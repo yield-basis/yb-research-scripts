@@ -10,7 +10,8 @@ RPC fetches except a single Multicall3 at AIRDROP_1_BLOCK if it's not
 already in the PPS cache (then it gets persisted back).
 
 Excludes the same non-user addresses as all_users_pnl.py (gauge, LT,
-fee_receiver, ZERO_ADDR, EXCLUDED_WALLETS).
+fee_receiver, ZERO_ADDR, EXCLUDED_WALLETS), and counts a HybridVault's
+position as its owner's.
 
 Usage:
     uv run python scripts/btc_time_integral.py [--end-block N] [--out FILE]
@@ -36,6 +37,7 @@ from yb import (  # noqa: E402
     EXCLUDED_WALLETS,
     all_markets,
     fee_receiver,
+    hybrid_vault_owners,
     rpc_url,
     w3,
 )
@@ -200,6 +202,13 @@ def main() -> None:
     fee_dist = fee_receiver().lower()
     _log(f"fee_receiver = {fee_dist}")
     _log(f"EXCLUDED_WALLETS = {EXCLUDED_WALLETS}")
+    # A HybridVault's position is its owner's (as in all_users_pnl.py)
+    seen = {topic_to_addr(lg["topics"][k].hex() if isinstance(lg["topics"][k], bytes)
+                          else lg["topics"][k])
+            for lt_t, g_t, _ in market_events.values() for lg in (*lt_t, *g_t)
+            for k in (1, 2)}
+    vault_owner = hybrid_vault_owners(seen, end_block)
+    _log(f"attributing {len(vault_owner)} HybridVault(s) to their owners")
 
     market_user_deltas: dict[int, dict[str, list]] = {}
     total_decoded = 0
@@ -215,12 +224,16 @@ def main() -> None:
         lt_t, g_t, _yb_t = market_events[idx]
         for lg in tqdm(lt_t, desc=f"M{idx} LT.Transfer", leave=False, unit="ev"):
             b, lidx, sender, receiver, value = _decode_transfer(lg)
+            sender = vault_owner.get(sender, sender)
+            receiver = vault_owner.get(receiver, receiver)
             if sender not in EXCLUDE:
                 user_deltas[sender].append((b, lidx, -value, 0))
             if receiver not in EXCLUDE:
                 user_deltas[receiver].append((b, lidx, value, 0))
         for lg in tqdm(g_t, desc=f"M{idx} Gauge.Transfer", leave=False, unit="ev"):
             b, lidx, sender, receiver, value = _decode_transfer(lg)
+            sender = vault_owner.get(sender, sender)
+            receiver = vault_owner.get(receiver, receiver)
             if sender not in EXCLUDE:
                 user_deltas[sender].append((b, lidx, 0, -value))
             if receiver not in EXCLUDE:
