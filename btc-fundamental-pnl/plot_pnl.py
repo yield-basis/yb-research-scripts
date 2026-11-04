@@ -1,7 +1,9 @@
 """Plots of the fundamental (users + admin) PnL of the YB BTC markets.
 
-Reads data/pnl.csv.xz (compute_pnl.py) and writes, as both PDF and PNG:
-    pics/btc_relative_pnl        relative PnL of all BTC markets: system + reliable only
+Reads data/pnl.csv.xz (compute_pnl.py), which starts at the window start
+(--start there), and writes, as both PDF and PNG:
+    pics/btc_relative_pnl        relative PnL of all BTC markets: system and users' part
+                                 (after admin fee), each as designed + reliable
     pics/<asset>_relative_pnl    the same per asset across versions: wbtc, cbbtc, tbtc, weth
     pics/btc_fundamental_pnl     relative PnL of all BTC markets (system = users + admin
                                  fee charged) with the "reliable" dashed line, the
@@ -126,6 +128,10 @@ def pct(idx: pd.Series) -> pd.Series:
     return (idx - 1) * 100
 
 
+def since(w: pd.DataFrame) -> str:
+    return f"since {w.index[0]:%-d %b %Y %H:%M} UTC"
+
+
 def label_end(ax, w, y, text, color, **kw):
     ax.annotate(text, (w.index[-1], y), xytext=(4, 0), textcoords="offset points",
                 va="center", color=color, fontsize=8.5, **kw)
@@ -133,6 +139,7 @@ def label_end(ax, w, y, text, color, **kw):
 
 def label_ends(ax, w, items, min_gap_pt=14):
     """End-of-line labels [(y, text, color, kw)], nudged apart so they don't overlap."""
+    ax.get_ylim()  # apply any pending autoscale, so transData maps y correctly
     to_pt = ax.transData.transform
     items = sorted(items, key=lambda it: it[0])
     placed = []
@@ -172,17 +179,23 @@ def fig_main(markets, w, wk, threshold):
     ax_rel.plot(w.index, system, color=INK, lw=2.0,
                 label="system = users + admin fee, pools as designed")
     reliable = pct(w["idx_rel_total"])
+    users_rel = pct(w["idx_users_rel_total"])
     ax_rel.plot(w.index, reliable, color=INK, lw=1.4, ls=(0, (4, 2.5)),
                 label=f"reliable: while price_scale is >{threshold:.0%} off, held at max(start, non-inflated value)")
+    ax_rel.plot(w.index, users_rel, color=USERS, lw=1.2, ls=(0, (4, 2.5)),
+                label="users' part, reliable")
     shade(ax_rel, spans, label=f"most equity in pools >{threshold:.0%} off the market")
     top = max(system.max(), reliable.max())
-    ax_rel.set_ylim(top=top + 0.9 * (top - users.min()))  # headroom for the legend
+    bottom = min(users.min(), users_rel.min())
+    ax_rel.set_ylim(top=top + 0.9 * (top - bottom))  # headroom for the legend
     label_ends(ax_rel, w, [
         (reliable.iloc[-1], f"{reliable.iloc[-1]:+.2f}%", INK, {}),
         (system.iloc[-1], f"{system.iloc[-1]:+.2f}%", INK, {"fontweight": "bold"}),
-        (users.iloc[-1], f"{users.iloc[-1]:+.2f}%", USERS, {})])
+        (users.iloc[-1], f"{users.iloc[-1]:+.2f}%", USERS, {}),
+        (users_rel.iloc[-1], f"{users_rel.iloc[-1]:+.2f}%", USERS, {})])
     ax_rel.axhline(0, color=AXIS, lw=0.8)
-    ax_rel.set_title("Relative fundamental PnL of all YB BTC markets (v1 → v2 → v3, equity-weighted)")
+    ax_rel.set_title("Relative fundamental PnL of all YB BTC markets "
+                     f"(v1 → v2 → v3, equity-weighted), {since(w)}")
     ax_rel.set_ylabel("cumulative return, % of BTC equity")
     ax_rel.legend(loc="upper left", bbox_to_anchor=(0, 0.95), fontsize=8, ncol=2)
     mark_eras(ax_rel, w, markets, label=True)
@@ -201,9 +214,16 @@ def fig_main(markets, w, wk, threshold):
     mark_eras(ax_bal, w, markets)
 
     ax_btc.plot(w.index, w["admin_total"], color=MUTED, lw=1.3, label="of which admin fee charged")
+    ax_btc.plot(w.index, w["pnl_users_total"], color=USERS, lw=1.3,
+                label="users' part (system − admin fee)")
+    ax_btc.plot(w.index, w["pnl_users_rel_total"], color=USERS, lw=1.1, ls=(0, (4, 2.5)),
+                label="users' part, reliable")
     ax_btc.plot(w.index, w["pnl_adj_total"], color=INK, lw=1.6, label="system PnL")
-    label_end(ax_btc, w, w["pnl_adj_total"].iloc[-1], f"{w['pnl_adj_total'].iloc[-1]:+.1f}", INK)
-    label_end(ax_btc, w, w["admin_total"].iloc[-1], f"{w['admin_total'].iloc[-1]:+.1f}", MUTED)
+    label_ends(ax_btc, w, [
+        (w[c].iloc[-1], f"{w[c].iloc[-1]:+.1f}", color, kw)
+        for c, color, kw in (("pnl_adj_total", INK, {"fontweight": "bold"}),
+                             ("pnl_users_total", USERS, {}), ("pnl_users_rel_total", USERS, {}),
+                             ("admin_total", MUTED, {}))])
     ax_btc.axhline(0, color=AXIS, lw=0.8)
     ax_btc.set_title("The same in absolute terms")
     ax_btc.set_ylabel("BTC")
@@ -286,7 +306,7 @@ def fig_valuations(markets, w):
         ends.append((y.iloc[-1], f"{y.iloc[-1]:+.1f}%", color, {}))
     label_ends(ax, w, ends)
     ax.axhline(0, color=AXIS, lw=0.8)
-    ax.set_title("Relative PnL of all YB BTC markets (users + admin) under each valuation")
+    ax.set_title(f"Relative PnL of all YB BTC markets (users + admin) under each valuation, {since(w)}")
     ax.set_ylabel("cumulative return, %")
     ax.legend(loc="lower left", fontsize=8)
     mark_eras(ax, w, markets, label=True)
@@ -334,10 +354,12 @@ def version_zones(w, markets):
 
 
 def fig_relative(w, markets, group, unit, title, name, threshold):
-    """One panel: relative PnL of a group of markets, system and reliable lines only."""
+    """One panel: relative PnL of a group of markets, system and users' part (as
+    designed and reliable)."""
     live = w[f"e_adj_{group}"] > 0
     w = w.loc[w.index >= w.index[live.to_numpy().argmax()]]
     system, reliable = pct(w[f"idx_adj_{group}"]), pct(w[f"idx_rel_{group}"])
+    users, users_rel = pct(w[f"idx_users_{group}"]), pct(w[f"idx_users_rel_{group}"])
     fig, ax = plt.subplots(figsize=(11, 5))
     labelled = set()
     for a, b, v in version_zones(w, markets):
@@ -349,6 +371,9 @@ def fig_relative(w, markets, group, unit, title, name, threshold):
     ax.plot(w.index, reliable, color=INK, lw=1.4, ls=(0, (4, 2.5)),
             label=f"reliable: while price_scale is >{threshold:.0%} off, "
                   "held at max(start, non-inflated value)")
+    ax.plot(w.index, users, color=USERS, lw=1.4, label="users' part (after admin fee)")
+    ax.plot(w.index, users_rel, color=USERS, lw=1.2, ls=(0, (4, 2.5)),
+            label="users' part, reliable")
     ax.axhline(0, color=AXIS, lw=0.8)
     launch = {}
     for m in markets.values():  # first market of each version in this group
@@ -358,7 +383,7 @@ def fig_relative(w, markets, group, unit, title, name, threshold):
         ax.axvline(t, color=AXIS, lw=0.8, zorder=0)
         ax.annotate(f"{version} launch", (t, 1), xycoords=("data", "axes fraction"),
                     xytext=(3, -2), textcoords="offset points", va="top", color=MUTED, fontsize=8)
-    ax.set_title(f"Relative fundamental PnL: {title}")
+    ax.set_title(f"Relative fundamental PnL: {title}, {since(w)}")
     ax.set_ylabel(f"cumulative return, % of {unit} equity")
     handles, labels = ax.get_legend_handles_labels()
     order = [i for i, lab in enumerate(labels) if not lab.startswith("most TVL")]
@@ -366,14 +391,17 @@ def fig_relative(w, markets, group, unit, title, name, threshold):
     ax.legend([handles[i] for i in order], [labels[i] for i in order],
               loc="upper left", bbox_to_anchor=(0, 0.93), fontsize=8.5, ncol=2,
               frameon=True, facecolor=SURFACE, edgecolor=GRID, framealpha=1)
-    lo, hi = min(system.min(), reliable.min(), 0), max(system.max(), reliable.max())
-    ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.45 * (hi - lo))  # headroom for the legend
+    lines = (system, reliable, users, users_rel)
+    lo, hi = min(min(s.min() for s in lines), 0), max(s.max() for s in lines)
+    ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.55 * (hi - lo))  # headroom for the legend
     ax.xaxis.set_major_locator(mdates.MonthLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
     fig.tight_layout()
     label_ends(ax, w, [
         (system.iloc[-1], f"{system.iloc[-1]:+.2f}%", INK, {"fontweight": "bold"}),
-        (reliable.iloc[-1], f"{reliable.iloc[-1]:+.2f}%", INK, {})])
+        (reliable.iloc[-1], f"{reliable.iloc[-1]:+.2f}%", INK, {}),
+        (users.iloc[-1], f"{users.iloc[-1]:+.2f}%", USERS, {"fontweight": "bold"}),
+        (users_rel.iloc[-1], f"{users_rel.iloc[-1]:+.2f}%", USERS, {})])
     save(fig, name)
     return fig
 

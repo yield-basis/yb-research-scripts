@@ -5,6 +5,8 @@ Sampled blocks:
     * for every flow block b of any market (data/events.csv.xz): b-1 and b, so a
       flow is always isolated in a single-block interval (b-1, b] that the PnL
       step can drop exactly; same for WithdrawAdminFees blocks (admin reset).
+    * the last block at or before --start (default yb_common.START), so the
+      measured window begins exactly there.
 
 Each sampled block is ONE eth_call to Multicall3.aggregate3 bundling, for every
 market already created at that block:
@@ -26,6 +28,7 @@ Outputs:
 
 Usage:
     uv run python fetch_states.py [--stride 150] [--end-block N] [--workers 16]
+                                  [--start "2025-10-15 12:02:22"]
 """
 from __future__ import annotations
 
@@ -39,8 +42,8 @@ from dataclasses import asdict
 import eth_abi
 from tqdm import tqdm
 
-from yb_common import (CHAINLINK_BTCUSD, DATA, MC3, RPC_BATCH, eth_call, fetch_multi_retry,
-                       head_block, selector, yb_markets)
+from yb_common import (CHAINLINK_BTCUSD, DATA, MC3, RPC_BATCH, START, block_at, eth_call,
+                       fetch_multi_retry, head_block, parse_utc, selector, yb_markets)
 
 MARKET_CALLS = [  # (contract attr, signature, output types, column names, arg attr)
     ("amm", "collateral_amount()", ["uint256"], ["collateral"], None),
@@ -133,6 +136,8 @@ def main() -> None:
     ap.add_argument("--stride", type=int, default=150)
     ap.add_argument("--end-block", type=int, default=None)
     ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--start", default=START,
+                    help=f"window start, UTC (default {START}); its block is always sampled")
     args = ap.parse_args()
 
     markets = yb_markets()
@@ -142,12 +147,14 @@ def main() -> None:
     end = args.end_block or max(head_block() - 5, max(flow_blocks))
     start = min(m.created_block for m in markets)
 
-    blocks = set(range(start, end + 1, args.stride)) | {end}
+    window_start = block_at(parse_utc(args.start))
+    blocks = set(range(start, end + 1, args.stride)) | {end, window_start}
     for b in flow_blocks:
         blocks |= {b - 1, b}
     blocks = sorted(b for b in blocks if start <= b <= end)
     print(f"blocks {start}..{end}: {len(blocks):,} samples "
-          f"({len(flow_blocks):,} flow blocks, grid stride {args.stride})")
+          f"({len(flow_blocks):,} flow blocks, grid stride {args.stride}, "
+          f"window start {args.start} UTC = block {window_start})")
 
     plans = {}
 

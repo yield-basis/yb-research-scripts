@@ -37,6 +37,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import cache
 from math import isqrt
 from pathlib import Path
@@ -64,6 +65,19 @@ MARKETS = sorted(VERSIONS)
 LOGS_RANGE = 10_000   # node: eth_getLogs block range limit
 RPC_BATCH = 100       # node: --rpc.batch.limit
 WAD = 10**18
+
+# Start of the measured window (UTC): PnL counts from the state as of this moment,
+# i.e. after the last block at or before it (23582964). History before it is still
+# fetched, so `compute_pnl.py --start` can move the window without refetching.
+START = "2025-10-15 12:02:22"
+
+
+def parse_utc(s: str) -> int:
+    """'YYYY-MM-DD HH:MM:SS' (UTC unless an offset is given) or unix seconds -> unix seconds."""
+    if s.isdigit():
+        return int(s)
+    dt = datetime.fromisoformat(s)
+    return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp())
 
 
 def selector(sig: str) -> bytes:
@@ -107,6 +121,24 @@ def fetch_multi_retry(payloads, attempts: int = 5):
 
 def head_block() -> int:
     return int(rpc().fetch("eth_blockNumber", []), 16)
+
+
+def block_timestamp(block: int) -> int:
+    return int(rpc().fetch("eth_getBlockByNumber", [hex(block), False])["timestamp"], 16)
+
+
+def block_at(ts: int) -> int:
+    """Last block with timestamp <= ts: the state 'as of' ts (binary search)."""
+    lo, hi = 0, head_block()
+    if block_timestamp(hi) <= ts:
+        return hi
+    while hi - lo > 1:  # invariant: timestamp(lo) <= ts < timestamp(hi)
+        mid = (lo + hi) // 2
+        if block_timestamp(mid) <= ts:
+            lo = mid
+        else:
+            hi = mid
+    return lo
 
 
 def eth_call(to: str, sig: str, types=(), args=(), out=("uint256",), block="latest"):

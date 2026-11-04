@@ -1,9 +1,12 @@
 # btc-fundamental-pnl
 
 Fundamental PnL of the Yield Basis BTC markets across v1 (0–2), v2 (3–5) and
-v3 (7–9). It counts users and admin together, in BTC. The WETH markets (6 = v2
-code, 10 = v3) are reported per asset only. The BTC "system" totals cover the
-BTC markets alone.
+v3 (7–9), and what users earned from it after the admin fee. It counts in BTC.
+The WETH markets (6 = v2 code, 10 = v3) are reported per asset only. The BTC
+"system" totals cover the BTC markets alone.
+
+Everything is measured from **2025-10-15 12:02:22 UTC**, the state after block
+23582964 (`START` in `yb_common.py`; `--start` overrides it).
 
 ## Run
 
@@ -11,12 +14,38 @@ BTC markets alone.
 cp .env.example .env               # ETH_RPC_URL = archive node, ETHERSCAN_API_KEY
 uv run python fetch_events.py      # ~3 min  -> data/events.csv.xz   (flows)
 uv run python fetch_states.py      # ~4 min  -> data/states.csv.xz, data/markets.json
-uv run python compute_pnl.py       # ~5 min  -> data/pnl.csv.xz, data/monthly.csv
+uv run python compute_pnl.py       # ~5 min  -> data/pnl.csv.xz, data/monthly.csv, data/summary.csv
 uv run python plot_pnl.py          #         -> pics/*.pdf, pics/*.png, data/weekly.csv
 uv run python validate.py          # boa fork cross-check (optional)
 ```
 
 `plot_pnl.py --show` opens the figures in interactive QtAgg windows.
+
+The full history since v1 launch is fetched. `compute_pnl.py --start "..."`
+moves the window without refetching. `fetch_states.py --start` samples that
+exact block. Otherwise compute_pnl warns and starts at the nearest sample before.
+
+## What users earned (`data/summary.csv`)
+
+Users' PnL = system PnL − admin fee charged, per group (all BTC, v1/v2/v3, each
+asset). It is given three ways:
+
+| column | system valuation | use for |
+|---|---|---|
+| `users_pnl` | as designed (LP at the guaranteed virtual price, at `price_scale`) | the headline number |
+| `users_pnl_reliable` | reliable line (see below) | the conservative number; equals `users_pnl` when the pools end balanced and no window is open |
+| `users_pnl_lt_books` | LT's own books: change of `liquidity.total`, i.e. what `pricePerShare()` reports | **v2 / v3 only**. Those LTs book at `price_scale`, so this is the users' NAV directly. v1 LT books at the EMA `price_oracle`, so for v1 it is distorted whenever `price_scale` and the oracle differ |
+
+The `users_return*` columns give the same as a chain-linked return.
+
+Why v1 is the tricky one: v1 and v2 share the same twocrypto v2.1.0d pools, but
+v1 LT values its LP at the pool's EMA oracle while the LP itself is priced at
+`price_scale`. Its books (and `pricePerShare`) therefore drift whenever the
+pool lags the market. In Nov 2025 `price_scale` ran up to 10–24% above the
+oracle. The admin fee is still charged on those books (the LT replay
+reproduces that exactly), and losses are never shared with the admin. The
+as-designed / reliable valuation re-prices v1 at `price_scale`, consistently
+with v2/v3.
 
 ## Method
 
@@ -49,7 +78,8 @@ uv run python validate.py          # boa fork cross-check (optional)
   its as-designed index times the equity-weighted average of its markets'
   factors (reliable value / as-designed value). It has no path dependence,
   equals the solid line whenever every pool is balanced, and always lies
-  between its markets' own lines.
+  between its markets' own lines. In BTC, a market's reliable value is its
+  as-designed equity times its factor.
 * **Balanced out (non-inflated)**, in `rebalance.py`: the value if the system
   were balanced out at the current market price. `price_scale` walks to the
   market price in 40 steps. After each step, arbitrage brings the pool back
@@ -70,9 +100,9 @@ uv run python validate.py          # boa fork cross-check (optional)
 
 | file | content |
 |---|---|
-| `btc_relative_pnl` | all BTC markets: system (as designed) and reliable lines only, on pale zones showing which version held most TVL |
+| `btc_relative_pnl` | all BTC markets: system (black) and users' part after admin fee (blue), each as designed (solid) and reliable (dashed), on pale zones showing which version held most TVL |
 | `wbtc_ / cbbtc_ / tbtc_ / weth_relative_pnl` | the same per asset, chaining that asset's markets across versions |
-| `btc_fundamental_pnl` | relative PnL: system vs users' part (gap = admin fee) + reliable dashed line; non-inflated (balanced-out) value; same in BTC; BTC price; weekly APR; realised vol |
+| `btc_fundamental_pnl` | relative PnL: system vs users' part (gap = admin fee) + reliable dashed lines; non-inflated (balanced-out) value; system / users / admin fee in BTC; BTC price; weekly APR; realised vol |
 | `btc_pnl_valuations` | relative PnL under every valuation; latent cost of balancing out; `price_scale` lag of each pool |
 | `btc_pnl_by_market` | per asset: relative PnL and equity of each version's market |
 | `btc_apr_vs_vol` | weekly APR vs realised vol, split by whether the pools tracked the market |
