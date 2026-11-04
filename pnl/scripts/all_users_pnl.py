@@ -22,11 +22,28 @@ but never claimed aren't penalised.
 Each row in the CSV is one (market, user) and reports both PnL views
 (redemption-based via preview_withdraw, NAV-based via pricePerShare),
 YB rewards (received transfers + pending claimable) valued in BTC, and
-position-size summaries.
+position-size summaries. Both unstaked LT and gauge-staked LT count.
+
+Window: PnL is measured from --start (default yb.WINDOW_START,
+2025-10-15 12:02:22 UTC; the state at the last block at or before it) to
+--end-block. Balances are still rebuilt from each market's full transfer
+history, so v1 positions that existed at the start are picked up there and
+valued at that block; only intervals after the start count. YB earned in the
+window = YB received after the start + claimable at the end - claimable at
+the start (gauge claims began at 10:16 UTC that day), the start part valued
+at the start's YB and asset prices.
+
+Which view to read (`net_pnl`):
+    v1     redemption (preview_withdraw). v1 LT books at the pool's EMA
+           oracle, so its pricePerShare drifts far above what a withdrawal
+           pays whenever price_scale lags (1.44 vs 0.89 in Feb 2026).
+    v2/v3  NAV (pricePerShare). These LT book at price_scale.
+Both pure views stay in net_pnl_redem / net_pnl_pps.
 
 Usage:
-    uv run python scripts/all_users_pnl.py MARKET_IDX [MARKET_IDX ...] [--out FILE]
-    # default output: pnl_all_users.csv
+    uv run python scripts/all_users_pnl.py [MARKET_IDX ...] [--out FILE]
+                                           [--end-block N] [--start "2025-10-15 12:02:22"]
+    # no markets = all of the factory's markets; default output: pnl_all_users.csv
 """
 from __future__ import annotations
 
@@ -35,6 +52,7 @@ import pickle
 import sys
 import time as _time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 import polars as pl
 import requests
@@ -46,10 +64,14 @@ from web3 import Web3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from yb import (  # noqa: E402
     EXCLUDED_WALLETS,
+    WINDOW_START,
     all_markets,
+    block_at,
     fee_receiver,
     market_deploy_block,
+    parse_utc,
     rpc_url,
+    version,
     w3,
 )
 
@@ -105,10 +127,14 @@ YB_POOL = Web3.to_checksum_address("0xec977f46467a3021785cff88894886e617abd65b")
 ZERO_ADDR = "0x" + "0" * 40
 
 PROBE_LT = 10**15
-CHUNK = 1000
+# eth_getLogs block range per request. The local node takes 10k; public
+# fallbacks often cap at 1000 (set LOGS_CHUNK=1000 there).
+CHUNK = int(os.environ.get("LOGS_CHUNK", "10000"))
+LOGS_PER_POST = 4    # getLogs requests per JSON-RPC batch
+WORKERS = 8          # concurrent HTTP POSTs (getLogs and state sampling)
 
 CACHE_DIR = "cache"
-PPS_FLUSH_EVERY = 500  # write PPS cache to disk every N blocks
+PPS_FLUSH_EVERY = 10_000  # write PPS cache to disk every N blocks
 
 # JSON-RPC batch size for eth_call sampling. Bench (scripts/bench_rpc.py)
 # showed 20 is the sweet spot on the local node — node caps batches at
@@ -169,7 +195,8 @@ def topic_to_addr(topic_hex: str) -> str:
 
 
 def fetch_logs_chunked(client, address, topics, start_block, end_block, label):
-    """eth_getLogs in 1000-block chunks, BATCH_SIZE chunks per HTTP POST.
+    """eth_getLogs in CHUNK-block ranges, LOGS_PER_POST per HTTP POST, WORKERS POSTs
+    in flight.
 
     Returns logs in a uniform shape: each log has bytes `topics[i]`, bytes
     `data`, int `blockNumber`, int `logIndex` — same as web3.py would
@@ -188,7 +215,6 @@ def fetch_logs_chunked(client, address, topics, start_block, end_block, label):
     ]
     addr = Web3.to_checksum_address(address)
     url = rpc_url()
-    sess = requests.Session()
 
     def _payload(req_id, from_b, to_b):
         return {
@@ -210,28 +236,33 @@ def fetch_logs_chunked(client, address, topics, start_block, end_block, label):
             "logIndex": int(raw["logIndex"], 16),
         }
 
-    logs = []
-    t0 = _time.time()
-    pbar = tqdm(total=len(chunks), desc=label, leave=False, unit="chunk")
-    for batch_start in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[batch_start:batch_start + BATCH_SIZE]
+    def _fetch(batch):
         payload = [_payload(j, fb, tb) for j, (fb, tb) in enumerate(batch)]
         resp = _retry(
-            lambda payload=payload: sess.post(url, json=payload, timeout=180),
+            lambda: requests.post(url, json=payload, timeout=180),
             label=f"getLogs {batch[0][0]}..{batch[-1][1]}")
         resp.raise_for_status()
         results = resp.json()
         if not isinstance(results, list):
             raise RuntimeError(f"non-list eth_getLogs response: {results}")
         by_id = {r["id"]: r for r in results}
+        out = []
         for j in range(len(batch)):
             r = by_id[j]
             if "result" not in r:
                 raise RuntimeError(f"eth_getLogs error in chunk "
                                    f"{batch[j][0]}..{batch[j][1]}: {r.get('error')}")
-            for raw_log in r["result"]:
-                logs.append(_normalize(raw_log))
-        pbar.update(len(batch))
+            out += [_normalize(raw_log) for raw_log in r["result"]]
+        return out
+
+    logs = []
+    t0 = _time.time()
+    batches = [chunks[i:i + LOGS_PER_POST] for i in range(0, len(chunks), LOGS_PER_POST)]
+    pbar = tqdm(total=len(chunks), desc=label, leave=False, unit="chunk")
+    with ThreadPoolExecutor(WORKERS) as ex:
+        for batch, part in zip(batches, ex.map(_fetch, batches)):  # in block order
+            logs += part
+            pbar.update(len(batch))
     pbar.close()
     _log(f"  ← {label}: {len(logs)} logs in {_time.time() - t0:.1f}s")
     return logs
@@ -250,9 +281,13 @@ def _decode_transfer(lg):
 
 def main() -> None:
     args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        sys.exit(0)
     output_csv = "pnl_all_users.csv"
     end_block_override = None
-    while "--out" in args or "--end-block" in args:
+    start = WINDOW_START
+    while "--out" in args or "--end-block" in args or "--start" in args:
         if "--out" in args:
             i = args.index("--out")
             output_csv = args[i + 1]
@@ -261,14 +296,17 @@ def main() -> None:
             i = args.index("--end-block")
             end_block_override = int(args[i + 1])
             args = args[:i] + args[i + 2:]
-    market_indices = [int(a) for a in args]
-    if not market_indices:
-        print(__doc__)
-        sys.exit(1)
+        if "--start" in args:
+            i = args.index("--start")
+            start = args[i + 1]
+            args = args[:i] + args[i + 2:]
 
     client = w3()
     end_block = end_block_override if end_block_override else client.eth.block_number
     all_mks = {m.idx: m for m in all_markets()}
+    market_indices = [int(a) for a in args] or sorted(all_mks)
+    window_block = block_at(parse_utc(start))
+    print(f"window: from {start} UTC = state at block {window_block}")
 
     # Per-market context
     ctx_by_idx: dict[int, dict] = {}
@@ -277,18 +315,20 @@ def main() -> None:
         token = client.eth.contract(address=m.asset_token, abi=ERC20_ABI)
         sym = token.functions.symbol().call()
         decimals = token.functions.decimals().call()
+        deploy = market_deploy_block(idx)
         ctx_by_idx[idx] = {
             "market": m,
             "sym": sym,
             "btc_scale": 10 ** decimals,
-            "start_block": market_deploy_block(idx),
+            "start_block": deploy,                   # events (balances) from here
+            "pnl_from": max(deploy, window_block),   # PnL from here
             "lt_addr": Web3.to_checksum_address(m.lt),
             "gauge_addr": Web3.to_checksum_address(m.staker),
             "cp_addr": Web3.to_checksum_address(m.cryptopool),
         }
         c = ctx_by_idx[idx]
-        print(f"Market [{idx}] {sym}: LT={c['lt_addr']} "
-              f"deploy_block={c['start_block']}")
+        print(f"Market [{idx}] {version(idx)} {sym}: LT={c['lt_addr']} "
+              f"deploy_block={deploy} pnl_from={c['pnl_from']}")
     print(f"end_block: {end_block}\n")
 
     _stage("Stage 1/4: fetching event logs")
@@ -384,6 +424,7 @@ def main() -> None:
     all_blocks: set[int] = {end_block}
     for idx, c in ctx_by_idx.items():
         all_blocks.add(c["start_block"])
+        all_blocks.add(c["pnl_from"])
         for deltas in market_user_deltas[idx].values():
             all_blocks.update(b for b, _, _, _ in deltas)
         for yb_rec in market_user_yb[idx].values():
@@ -437,23 +478,21 @@ def main() -> None:
         ret_bytes = bytes.fromhex(hex_str[2:] if hex_str.startswith("0x") else hex_str)
         return abi_decode(["(bool,bytes)[]"], ret_bytes)[0]
 
-    pbar = tqdm(total=len(todo), desc="PPS sampling", unit="block")
-    n_processed = 0
-    for batch_start in range(0, len(todo), BATCH_SIZE):
-        batch_blocks = todo[batch_start:batch_start + BATCH_SIZE]
+    def _sample(batch_blocks):
         payload = [
             {"jsonrpc": "2.0", "id": j, "method": "eth_call",
              "params": [{"to": MULTICALL3, "data": agg_calldata}, hex(b)]}
             for j, b in enumerate(batch_blocks)
         ]
         response = _retry(
-            lambda payload=payload: sess.post(url, json=payload, timeout=120),
+            lambda: requests.post(url, json=payload, timeout=120),
             label=f"batch@{batch_blocks[0]}..{batch_blocks[-1]}")
         response.raise_for_status()
         results = response.json()
         if not isinstance(results, list):
             raise RuntimeError(f"non-list batch response: {results}")
         by_id = {r["id"]: r for r in results}
+        out = []
         for j, b in enumerate(batch_blocks):
             r = by_id[j]
             if "result" not in r:
@@ -469,46 +508,74 @@ def main() -> None:
                     "btc": int.from_bytes(decoded[o + 3][1], "big") if decoded[o + 3][0] else 0,
                 }
             per_market["yb"] = int.from_bytes(decoded[yb_offset][1], "big") if decoded[yb_offset][0] else 0
-            cache[b] = per_market
-            n_processed += 1
-            pbar.update(1)
-            if n_processed % PPS_FLUSH_EVERY == 0:
+            out.append((b, per_market))
+        return out
+
+    pbar = tqdm(total=len(todo), desc="PPS sampling", unit="block")
+    since_flush = 0
+    batches = [todo[i:i + BATCH_SIZE] for i in range(0, len(todo), BATCH_SIZE)]
+    with ThreadPoolExecutor(WORKERS) as ex:
+        for part in ex.map(_sample, batches):
+            cache.update(part)
+            pbar.update(len(part))
+            since_flush += len(part)
+            if since_flush >= PPS_FLUSH_EVERY:
                 _save_pickle(pps_path, cache)
+                since_flush = 0
     pbar.close()
     _save_pickle(pps_path, cache)
 
-    _stage("Stage 3/4: pending YB rewards at end_block (Multicall3)")
-    pending_path = os.path.join(
-        CACHE_DIR,
-        f"pending_yb_{'_'.join(map(str, market_indices))}_to_{end_block}.pkl")
-    pending_yb: dict[int, dict[str, int]] = _load_pickle(pending_path) or {}
-    if pending_yb:
-        _log(f"Loaded cached pending-YB snapshot from {pending_path}")
+    # A failed sub-call decodes as 0, which would book a fake -100% / +100% move
+    # (and a whole-position fake PnL for anyone whose balance changes at that
+    # block). preview_withdraw reverts right after each launch, while the LT is
+    # still empty (pricePerShare there ~1.00002). Fill failed samples from the
+    # market's deploy on: carry the last good value forward, and back-fill the
+    # leading ones with the first good value.
+    for idx, c in ctx_by_idx.items():
+        live = [b for b in sorted_blocks if b >= c["start_block"]]
+        filled = defaultdict(int)
+        for k in ("pps", "pw", "cta", "btc"):
+            vals = [cache[b][idx][k] for b in live]
+            first = next((v for v in vals if v), 0)
+            last = first
+            for b, v in zip(live, vals):
+                if v:
+                    last = v
+                elif last:
+                    cache[b][idx] = {**cache[b][idx], k: last}  # leave the cached copy intact
+                    filled[k] += b >= c["pnl_from"]
+        filled = {k: n for k, n in filled.items() if n}
+        if filled:
+            _log(f"  M{idx}: filled failed samples in the window "
+                 f"(of {sum(b >= c['pnl_from'] for b in live)} blocks): {filled}")
 
+    _stage("Stage 3/4: pending YB rewards at end_block and window start (Multicall3)")
     # Per-market preview_claim selector — function ABI is identical across
     # gauges, so we encode (YB_TOKEN, user) once per call but reuse the
     # contract's encode_transaction_data path for safety.
     sample_gauge_full = client.eth.contract(
         address=ctx_by_idx[market_indices[0]]["gauge_addr"], abi=GAUGE_ABI)
 
-    need_pending: list[tuple[int, str]] = []
-    for idx in market_indices:
-        pending_yb.setdefault(idx, {})
-        for user in market_user_deltas[idx]:
-            if user not in pending_yb[idx]:
-                need_pending.append((idx, user))
-
-    if need_pending:
+    def pending_snapshot(at_block: int, markets: list[int], path: str, label: str):
+        """{market: {user: claimable YB (atomic)}} at `at_block`, cached at `path`."""
+        pending: dict[int, dict[str, int]] = _load_pickle(path) or {}
+        if pending:
+            _log(f"Loaded cached {label} snapshot from {path}")
+        need: list[tuple[int, str]] = []
+        for idx in markets:
+            pending.setdefault(idx, {})
+            need += [(idx, u) for u in market_user_deltas[idx] if u not in pending[idx]]
+        if not need:
+            _log(f"No {label} queries needed (all users cached)")
+            return pending
         # Each preview_claim runs an internal _checkpoint, so it's heavier
         # than the simple view calls in stage 2. Cap subcalls per multicall
         # at 50 to keep gas per eth_call modest.
         SUBCALLS_PER_MC = 50
-        chunks = [need_pending[i:i + SUBCALLS_PER_MC]
-                  for i in range(0, len(need_pending), SUBCALLS_PER_MC)]
-        _log(f"Querying preview_claim(YB, user) for {len(need_pending)} "
+        chunks = [need[i:i + SUBCALLS_PER_MC] for i in range(0, len(need), SUBCALLS_PER_MC)]
+        _log(f"Querying preview_claim(YB, user) at block {at_block} for {len(need)} "
              f"(gauge,user) pairs in {len(chunks)} multicall(s)")
-
-        pbar = tqdm(total=len(need_pending), desc="pending YB", unit="user")
+        pbar = tqdm(total=len(need), desc=label, unit="user")
         for batch_start in range(0, len(chunks), BATCH_SIZE):
             batch_chunks = chunks[batch_start:batch_start + BATCH_SIZE]
             payloads = []
@@ -522,38 +589,49 @@ def main() -> None:
                 agg_cd = mc3.functions.aggregate3(calls)._encode_transaction_data()
                 payloads.append({
                     "jsonrpc": "2.0", "id": j, "method": "eth_call",
-                    "params": [{"to": MULTICALL3, "data": agg_cd}, hex(end_block)],
+                    "params": [{"to": MULTICALL3, "data": agg_cd}, hex(at_block)],
                 })
             response = _retry(
                 lambda payloads=payloads: sess.post(url, json=payloads, timeout=180),
-                label=f"pending-yb batch {batch_start}/{len(chunks)}")
+                label=f"{label} batch {batch_start}/{len(chunks)}")
             response.raise_for_status()
             results = response.json()
             if not isinstance(results, list):
-                raise RuntimeError(f"non-list pending-yb response: {results}")
+                raise RuntimeError(f"non-list {label} response: {results}")
             by_id = {r["id"]: r for r in results}
             for j, chunk in enumerate(batch_chunks):
                 r = by_id[j]
                 if "result" not in r:
-                    raise RuntimeError(
-                        f"pending-yb eth_call error: {r.get('error')}")
+                    raise RuntimeError(f"{label} eth_call error: {r.get('error')}")
                 decoded = _decode_agg3_return(r["result"])
                 for k, (idx, user) in enumerate(chunk):
-                    amt = (int.from_bytes(decoded[k][1], "big")
-                           if decoded[k][0] else 0)
-                    pending_yb[idx][user] = amt
+                    pending[idx][user] = (int.from_bytes(decoded[k][1], "big")
+                                          if decoded[k][0] else 0)
                 pbar.update(len(chunk))
         pbar.close()
-        _save_pickle(pending_path, pending_yb)
-        _log(f"Saved pending-YB snapshot to {pending_path}")
-    else:
-        _log("No pending-YB queries needed (all users cached)")
+        _save_pickle(path, pending)
+        _log(f"Saved {label} snapshot to {path}")
+        return pending
+
+    tag = "_".join(map(str, market_indices))
+    pending_yb = pending_snapshot(
+        end_block, market_indices,
+        os.path.join(CACHE_DIR, f"pending_yb_{tag}_to_{end_block}.pkl"), "pending YB (end)")
+    # Markets already live at the window start: YB that had accrued by then but
+    # was claimed later belongs before the window.
+    live_at_start = [i for i in market_indices
+                     if ctx_by_idx[i]["start_block"] < ctx_by_idx[i]["pnl_from"]]
+    pending_start = pending_snapshot(
+        window_block, live_at_start,
+        os.path.join(CACHE_DIR, f"pending_yb_{tag}_at_{window_block}.pkl"),
+        "pending YB (start)") if live_at_start else {}
 
     for idx in market_indices:
         nz = sum(1 for v in pending_yb[idx].values() if v > 0)
         tot = sum(pending_yb[idx].values()) / 1e18
+        tot0 = sum(pending_start.get(idx, {}).values()) / 1e18
         _log(f"  M{idx}: {nz}/{len(pending_yb[idx])} users have pending YB, "
-             f"total = {tot:.4f} YB")
+             f"total = {tot:.4f} YB at end, {tot0:.4f} YB at window start")
 
     _stage("Stage 4/4: computing per-user PnL")
     rows = []
@@ -561,20 +639,29 @@ def main() -> None:
         sym = c["sym"]
         btc_scale = c["btc_scale"]
         pps_factor = btc_scale / 10**36
-        start_block = c["start_block"]
+        pnl_from = c["pnl_from"]
         user_deltas = market_user_deltas[idx]
         user_yb = market_user_yb[idx]
+        n_idle = 0
+        yb_attributed = 0
 
         for user, deltas in tqdm(user_deltas.items(),
                                  desc=f"M{idx} {sym}", unit="user", leave=False):
             deltas.sort(key=lambda x: (x[0], x[1]))
-            trajectory = [(start_block, 0, 0)]
+            # Balances held at the window start (rebuilt from the full history),
+            # then every change after it. A state at block b is the one after b.
+            trajectory = []
             lt_run = 0
             g_run = 0
             for b, _lidx, dlt, dg in deltas:
+                if b > pnl_from and not trajectory:
+                    trajectory.append((pnl_from, lt_run, g_run))
                 lt_run += dlt
                 g_run += dg
-                trajectory.append((b, lt_run, g_run))
+                if b > pnl_from:
+                    trajectory.append((b, lt_run, g_run))
+            if not trajectory:
+                trajectory.append((pnl_from, lt_run, g_run))
             trajectory.append((end_block, lt_run, g_run))
 
             positions_redem = []
@@ -624,6 +711,8 @@ def main() -> None:
             yb_recv_crvusd_atomic = 0.0
             yb_recv_btc_atomic = 0.0
             for b, amount in user_yb.get(user, []):
+                if b <= pnl_from:  # claimed before the window
+                    continue
                 cm = cache[b][idx]
                 yb_price = cache[b]["yb"]
                 crvusd = amount * yb_price / 10**18
@@ -641,18 +730,34 @@ def main() -> None:
             yb_pend_btc = (yb_pend_crvusd * btc_scale / cm_end["btc"]
                            if cm_end["btc"] > 0 else 0)
 
-            yb_total_atomic = yb_recv_atomic + yb_pend_atomic
-            yb_crvusd_atomic = yb_recv_crvusd_atomic + yb_pend_crvusd
-            yb_btc_atomic = yb_recv_btc_atomic + yb_pend_btc
+            # Claimable at the window start: accrued before it, so it comes off,
+            # valued at the start's prices.
+            yb_pend0_atomic = pending_start.get(idx, {}).get(user, 0)
+            cm0 = cache[pnl_from][idx]
+            yb_pend0_crvusd = yb_pend0_atomic * cache[pnl_from]["yb"] / 10**18
+            yb_pend0_btc = (yb_pend0_crvusd * btc_scale / cm0["btc"]
+                            if cm0["btc"] > 0 else 0)
+
+            if max_pos <= 0 and yb_recv_atomic == 0 and yb_pend_atomic == 0:
+                n_idle += 1  # nothing held and no YB inside the window
+                continue
+            yb_attributed += yb_recv_atomic
+
+            yb_total_atomic = yb_recv_atomic + yb_pend_atomic - yb_pend0_atomic
+            yb_crvusd_atomic = yb_recv_crvusd_atomic + yb_pend_crvusd - yb_pend0_crvusd
+            yb_btc_atomic = yb_recv_btc_atomic + yb_pend_btc - yb_pend0_btc
 
             pnl_lt_redem_btc = pnl_lt_redem / btc_scale
             pnl_g_redem_btc = pnl_g_redem / btc_scale
             pnl_lt_pps_btc = pnl_lt_pps / btc_scale
             pnl_g_pps_btc = pnl_g_pps / btc_scale
             yb_btc = yb_btc_atomic / btc_scale
+            net_redem = pnl_lt_redem_btc + pnl_g_redem_btc + yb_btc
+            net_pps = pnl_lt_pps_btc + pnl_g_pps_btc + yb_btc
 
             rows.append({
                 "market": idx,
+                "version": version(idx),
                 "symbol": sym,
                 "user": user,
                 "max_pos": max_pos / btc_scale,
@@ -663,30 +768,42 @@ def main() -> None:
                 "pnl_gauge_pps": pnl_g_pps_btc,
                 "yb_received": yb_recv_atomic / 1e18,
                 "yb_pending": yb_pend_atomic / 1e18,
+                "yb_pending_start": yb_pend0_atomic / 1e18,
                 "yb_earned": yb_total_atomic / 1e18,
                 "yb_value_crvusd": yb_crvusd_atomic / 1e18,
                 "yb_value_in_asset": yb_btc,
-                "net_pnl_redem": pnl_lt_redem_btc + pnl_g_redem_btc + yb_btc,
-                "net_pnl_pps": pnl_lt_pps_btc + pnl_g_pps_btc + yb_btc,
+                "net_pnl_redem": net_redem,
+                "net_pnl_pps": net_pps,
+                "net_pnl": net_redem if version(idx) == "v1" else net_pps,
             })
+
+        # YB that left the gauge in the window to an address that never held
+        # this market's LT/gauge shares is not attributed to anyone
+        yb_out = sum(a for recs in user_yb.values() for b, a in recs if b > pnl_from)
+        _log(f"  M{idx}: {n_idle} users idle in the window; YB claimed in window "
+             f"{yb_out / 1e18:,.0f}, attributed {yb_attributed / 1e18:,.0f}")
 
     df = pl.DataFrame(rows).sort(["market", "max_pos"], descending=[False, True])
     df.write_csv(output_csv)
     _stage(f"Done — wrote {len(df)} rows to {output_csv}")
 
-    print("\nMarket totals:")
-    summary = (df.group_by(["market", "symbol"])
+    print(f"\nMarket totals (window from block {window_block}; net_pnl = redemption "
+          f"view for v1, pricePerShare view for v2/v3):")
+    summary = (df.group_by(["market", "version", "symbol"])
                  .agg([
                      pl.col("user").n_unique().alias("n_users"),
                      pl.col("max_pos").sum().alias("Σ max_pos"),
+                     pl.col("net_pnl").sum().alias("Σ net_pnl"),
                      pl.col("net_pnl_redem").sum().alias("Σ net_pnl_redem"),
                      pl.col("net_pnl_pps").sum().alias("Σ net_pnl_pps"),
-                     pl.col("yb_received").sum().alias("Σ yb_recv"),
-                     pl.col("yb_pending").sum().alias("Σ yb_pend"),
+                     pl.col("yb_earned").sum().alias("Σ yb_earned"),
+                     pl.col("yb_pending_start").sum().alias("Σ yb_pend_start"),
                      pl.col("yb_value_in_asset").sum().alias("Σ yb_in_asset"),
                  ])
                  .sort("market"))
     pl.Config.set_tbl_rows(20)
+    pl.Config.set_tbl_cols(20)
+    pl.Config.set_tbl_width_chars(250)
     print(summary)
 
 

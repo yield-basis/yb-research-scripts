@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import cache
 
 from dotenv import load_dotenv
@@ -29,6 +30,32 @@ FACTORY_ENS = "factory.yieldbasis.eth"
 # tx (0xab8629e7…) inside the ~4-hour Multisend window of 2025-10-15.
 # Block timestamp: 2025-10-15 09:42:23 UTC (Unix 1760521343).
 AIRDROP_1_BLOCK = 23582267
+
+# Start of the per-user PnL window (UTC). PnL counts from the state as of this
+# moment, i.e. after the last block at or before it (23582964, 12:02:11).
+# v1 markets were already live then, so their positions are picked up mid-life;
+# v2 (2025-11-12) and v3 (2026-05-25) start empty inside the window.
+WINDOW_START = "2025-10-15 12:02:22"
+
+# Market index -> YB version. v1 and v2 share the same twocrypto pools, but v1 LT
+# books at the pool's EMA price_oracle, so v1 pricePerShare drifts far from what
+# a withdrawal pays whenever price_scale lags (up to +44% in Feb 2026); v2/v3
+# LT book at price_scale.
+VERSIONS = {0: "v1", 1: "v1", 2: "v1",
+            3: "v2", 4: "v2", 5: "v2", 6: "v2",
+            7: "v3", 8: "v3", 9: "v3", 10: "v3"}
+
+
+def version(idx: int) -> str:
+    return VERSIONS.get(idx, "v3+")
+
+
+def parse_utc(s: str) -> int:
+    """'YYYY-MM-DD HH:MM:SS' (UTC unless an offset is given) or unix seconds."""
+    if s.isdigit():
+        return int(s)
+    dt = datetime.fromisoformat(s)
+    return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp())
 
 # Addresses to exclude from per-user PnL analysis even though they hold LT
 # tokens. These are non-user contracts where the LT (and any YB rewards
@@ -162,6 +189,22 @@ def all_markets() -> list[Market]:
 def fee_receiver() -> str:
     """Address that receives YB protocol fees (FeeDistributor)."""
     return factory().functions.fee_receiver().call()
+
+
+@cache
+def block_at(ts: int) -> int:
+    """Last block with timestamp <= ts: the state 'as of' ts (binary search)."""
+    client = w3()
+    low, high = 0, client.eth.block_number
+    if client.eth.get_block(high)["timestamp"] <= ts:
+        return high
+    while high - low > 1:  # invariant: timestamp(low) <= ts < timestamp(high)
+        mid = (low + high) // 2
+        if client.eth.get_block(mid)["timestamp"] <= ts:
+            low = mid
+        else:
+            high = mid
+    return low
 
 
 @cache
