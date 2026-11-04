@@ -14,3 +14,11 @@ dependencies = [
     "matplotlib>=3.10",
     "pyqt6>=6.11.0",
 ]
+
+[tool.uv]
+# titanoboa 0.2.8 hard-pins mkdocs-material==9.5.41, a docs-only dependency that
+# boa never imports. It drags in vulnerable mkdocs-material / pymdown-extensions,
+# so drop it (a never-matching marker removes it from the resolution).
+override-dependencies = ["mkdocs-material; sys_platform == 'never'"]
+# Floors at the first releases fixing the advisories flagged by `uv audit`.
+constraint-dependencies = ["pillow>=13.0.0", "certifi>=2026.10.18"]
