@@ -42,6 +42,9 @@ def _log(msg: str) -> None:
 
 def main() -> None:
     args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        sys.exit(0)
     pnl_csv = "pnl_per_address_usd.csv"
     integral_csv = "value_integral.csv"
     output_csv = "yb_distribution.csv"
