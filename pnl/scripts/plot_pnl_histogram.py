@@ -16,16 +16,20 @@ Edge bins hold the clipped tails (--low / --high, default -10% / +10%).
 
 PnL view (default `net_pnl`: redemption for v1, pricePerShare for v2/v3, see
 all_users_pnl.py):
+    --after-entry-exit net_pnl minus entry/exit costs (needs all_users_pnl.py
+                       --entry-exit)
     --pps / --redeem   one pure view for all markets instead
     --by-market        one entry per (market, user) instead of per user
     --no-show          only save the PNG (no interactive window)
 
-Outputs: pnl_histogram_{net|pps|redem}[_by_market].png, and (per-user mode)
-pnl_per_user.csv with per-user totals in BTC-eq for the chosen view.
+Outputs: pnl_histogram_{net|net_after_entry_exit|pps|redem}[_by_market].png;
+in the default view and per-user mode also pnl_per_user.csv: per-user totals in
+BTC-eq of net PnL, YB and (if present) entry/exit costs and net after them.
 
 Usage:
     uv run python scripts/plot_pnl_histogram.py [CSV_PATH] [--low L --high H] [--min-pos P]
-                                                [--pps | --redeem] [--by-market] [--no-show]
+                                                [--after-entry-exit | --pps | --redeem]
+                                                [--by-market] [--no-show]
 """
 from __future__ import annotations
 
@@ -67,7 +71,9 @@ PCT = mticker.FuncFormatter(lambda x, _: f"{x:+.0%}" if abs(x) > 1e-12 else "0%"
 
 VIEWS = {"net_pnl": ("net", "v1 redemption, v2/v3 pricePerShare"),
          "net_pnl_pps": ("pps", "pricePerShare (NAV) for all markets"),
-         "net_pnl_redem": ("redem", "redemption (preview_withdraw) for all markets")}
+         "net_pnl_redem": ("redem", "redemption (preview_withdraw) for all markets"),
+         "net_pnl_after_entry_exit": ("net_after_entry_exit",
+                                      "v1 redemption, v2/v3 pricePerShare, after entry/exit costs")}
 
 
 def asset_to_btc_factors(df: pl.DataFrame) -> dict[int, float]:
@@ -111,6 +117,9 @@ def main() -> None:
     for flag in ("--by-market", "--no-show"):
         if flag in args:
             args.remove(flag)
+    if "--after-entry-exit" in args:
+        args.remove("--after-entry-exit")
+        pnl_col = "net_pnl_after_entry_exit"
     while "--low" in args or "--high" in args or "--pps" in args or "--redeem" in args:
         if "--low" in args:
             i = args.index("--low")
@@ -131,7 +140,9 @@ def main() -> None:
 
     df = pl.read_csv(csv_path)
     if pnl_col not in df.columns:
-        raise SystemExit(f"{csv_path} has no {pnl_col} column; rerun all_users_pnl.py")
+        raise SystemExit(f"{csv_path} has no {pnl_col} column; rerun all_users_pnl.py"
+                         + (" --entry-exit" if "entry_exit" in pnl_col else ""))
+    has_ee = "entry_exit_cost" in df.columns
     factors = asset_to_btc_factors(df)
     f = pl.col("market").replace_strict(factors)
     df = df.with_columns(
@@ -139,22 +150,28 @@ def main() -> None:
         yb_btc=pl.col("yb_value_in_asset") * f,
         avg_pos_btc=pl.col("avg_pos") * f,
         max_pos_btc=pl.col("max_pos") * f,
+        net_btc=pl.col("net_pnl") * f,
+        **({"entry_exit_cost_btc": pl.col("entry_exit_cost") * f,
+            "net_after_entry_exit_btc": pl.col("net_pnl_after_entry_exit") * f} if has_ee else {}),
     )
+    extra = ["net_btc"] + (["entry_exit_cost_btc", "net_after_entry_exit_btc"] if has_ee else [])
     if by_market:
         per = df.select("user", "market", "version", "avg_pos_btc", "max_pos_btc",
-                        "pnl_btc", "yb_btc")
+                        "pnl_btc", "yb_btc", *extra)
     else:
         per = (df.group_by("user")
                  .agg(pl.col("market").sort().cast(pl.String).str.join(" ").alias("markets"),
                       pl.col("version").unique().sort().str.join(" ").alias("versions"),
                       pl.col("avg_pos_btc").sum(), pl.col("max_pos_btc").sum(),
-                      pl.col("pnl_btc").sum(), pl.col("yb_btc").sum()))
+                      pl.col("pnl_btc").sum(), pl.col("yb_btc").sum(),
+                      *[pl.col(c).sum() for c in extra]))
     per = per.with_columns(
         pnl_ex_yb_btc=pl.col("pnl_btc") - pl.col("yb_btc"),
         rel=pl.col("pnl_btc") / pl.col("avg_pos_btc"),
     ).sort("pnl_btc")
-    if not by_market:
-        per.write_csv("pnl_per_user.csv")
+    write_csv = not by_market and pnl_col == "net_pnl"  # one per-user file, default view
+    if write_csv:
+        per.drop("pnl_btc").write_csv("pnl_per_user.csv")
 
     unit = "(market, user) entries" if by_market else "users"
     held = per.filter((pl.col("avg_pos_btc") > 0) & pl.col("rel").is_finite())
@@ -214,7 +231,8 @@ def main() -> None:
     ax_rel.set_xlabel("net PnL as % of the user's average position (incl. YB; edge bins "
                       f"hold the clipped tails: {clip_lo} below, {clip_hi} above)")
     ax_rel.set_ylabel("Σ average position in bin (BTC-eq)")
-    ax_rel.set_title(f"Per-user PnL since {WINDOW_START} UTC, staked + unstaked + YB — "
+    costs = " − entry/exit costs" if "entry_exit" in pnl_col else ""
+    ax_rel.set_title(f"Per-user PnL since {WINDOW_START} UTC, staked + unstaked + YB{costs} — "
                      f"{len(held):,} {unit}, markets {markets[0]}–{markets[-1]}")
     ax_rel.legend(loc="upper left")
 
@@ -240,7 +258,7 @@ def main() -> None:
 
     out_png = f"pnl_histogram_{tag}{'_by_market' if by_market else ''}.png"
     fig.savefig(out_png, dpi=150)
-    print(f"Saved {out_png}" + ("" if by_market else " and pnl_per_user.csv"))
+    print(f"Saved {out_png}" + (" and pnl_per_user.csv" if write_csv else ""))
     if show:
         plt.show()
 

@@ -20,9 +20,10 @@ caches intermediate artifacts, and emits CSVs / histograms.
 
 The scripts form a DAG, not a single entry point. The usual order:
 
-1. `scripts/all_users_pnl.py` (no args = all markets) → `pnl_all_users.csv`
-   (events + PPS samples → per-(user, market) PnL spreadsheet over the window
-   from `WINDOW_START`; writes `cache/`)
+1. `scripts/all_users_pnl.py --entry-exit` (no markets = all) →
+   `pnl_all_users.csv` (events + PPS samples → per-(user, market) PnL
+   spreadsheet over the window from `WINDOW_START`; writes `cache/`;
+   `--entry-exit` adds the entry/exit cost columns)
 2. `scripts/classify_users.py` → `pnl_all_users_classified.csv`
    (adds `addr_type` + `has_rescue` for each address)
 3. `scripts/btc_time_integral.py` → `btc_time_integral.csv`
@@ -31,7 +32,8 @@ The scripts form a DAG, not a single entry point. The usual order:
    (combines the two CSVs above into a YB-token allocation)
 5. `scripts/plot_pnl_histogram.py [--no-show]` → `pnl_histogram_net.png` +
    `pnl_per_user.csv` (per-user distribution, summed over markets in BTC-eq;
-   `--pps` / `--redeem` for a pure view, `--by-market` per (market, user))
+   `--after-entry-exit` for net PnL after entry/exit costs, `--pps` /
+   `--redeem` for a pure view, `--by-market` per (market, user))
 6. `scripts/debug_user.py` / `debug_user_pps.py` — single-user drill-down,
    no cache needed.
 
@@ -76,12 +78,16 @@ Required env vars (see `.env.example`):
   books at the pool's EMA oracle, so its pricePerShare runs far above what a
   withdrawal pays when price_scale lags (1.44 vs 0.89 on 2026-02-06). `net_pnl`
   = redemption for v1, pricePerShare for v2/v3.
-- **What the per-user PnL leaves out.** Positions are marked at the sampled
-  price after every balance change, so a user's own deposit/withdraw
-  conversion (assets paid vs the mark right after) isn't counted, nor is
-  same-block deposit→withdraw cycling (bots). Checked 2026-11-04 against the
-  LT Deposit/Withdraw amounts: ≤1 BTC per v1 market over the whole window;
-  an actual v1 withdrawal (19.8656 cbBTC) matched the mark (19.8653).
+- **Entry/exit costs (`--entry-exit`).** Positions are marked at the sampled
+  price after every balance change, so what a user paid above the mark on
+  deposit, or got below it on withdrawal (mostly the pool fee on imbalanced
+  adds/removes), is only in `entry_cost` / `exit_cost` /
+  `net_pnl_after_entry_exit`. With them, a user who entered and left inside
+  the window gets exactly withdrawn − deposited + YB. Same-block
+  mint+burn round trips are skipped: flash-loan bots that deposit, call
+  `distribute_borrower_fees` and exit without a Withdraw event (LT
+  topic 0x5bdcb9af is DistributeBorrowerFees, not an exit). An actual v1
+  withdrawal (19.8656 cbBTC) matched its redemption mark (19.8653).
 - **Fetch speed.** `all_users_pnl.py` asks for `LOGS_CHUNK` (default 10000)
   blocks per eth_getLogs and runs 8 POSTs in parallel, also for state
   sampling; set `LOGS_CHUNK=1000` on public RPCs that cap the range. Failed

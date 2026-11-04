@@ -40,8 +40,22 @@ Which view to read (`net_pnl`):
     v2/v3  NAV (pricePerShare). These LT book at price_scale.
 Both pure views stay in net_pnl_redem / net_pnl_pps.
 
+--entry-exit (optional): the cost of getting in and out, mostly the pool fee
+on depositing into / withdrawing from an imbalanced pool. Positions are marked
+at the share price right after each balance change, so what a user paid
+above that mark on deposit, or got below it on withdrawal, is otherwise
+invisible. From the LT Deposit / Withdraw events (by owner) in the window:
+    entry_cost = assets paid - shares x mark at the deposit block
+    exit_cost  = shares x mark at the withdrawal block - assets received
+with the mark of the row's view (redemption for v1, pricePerShare for v2/v3;
+both are in entry_exit_cost_redem / _pps). net_pnl_after_entry_exit =
+net_pnl - entry_cost - exit_cost. Same-block round trips (an owner minting
+and burning LT in one block: flash-loan bots, whose exit often emits no
+Withdraw) are skipped; per-market logs show what was skipped and any cost
+landing on owners with no position (zaps), which is not attributed.
+
 Usage:
-    uv run python scripts/all_users_pnl.py [MARKET_IDX ...] [--out FILE]
+    uv run python scripts/all_users_pnl.py [MARKET_IDX ...] [--out FILE] [--entry-exit]
                                            [--end-block N] [--start "2025-10-15 12:02:22"]
     # no markets = all of the factory's markets; default output: pnl_all_users.csv
 """
@@ -121,6 +135,10 @@ POOL_ABI = [{"name": "price_oracle", "type": "function", "stateMutability": "vie
              "inputs": [], "outputs": [{"type": "uint256"}]}]
 
 TRANSFER_TOPIC = "0x" + Web3.keccak(text="Transfer(address,address,uint256)").hex()
+# ERC4626-style LT events, identical in v1/v2/v3:
+#   Deposit(sender*, owner*, assets, shares), Withdraw(sender*, receiver*, owner*, assets, shares)
+DEPOSIT_TOPIC = Web3.keccak(text="Deposit(address,address,uint256,uint256)").to_0x_hex()
+WITHDRAW_TOPIC = Web3.keccak(text="Withdraw(address,address,address,uint256,uint256)").to_0x_hex()
 
 YB_TOKEN = Web3.to_checksum_address("0x01791F726B4103694969820be083196cC7c045fF")
 YB_POOL = Web3.to_checksum_address("0xec977f46467a3021785cff88894886e617abd65b")
@@ -287,6 +305,9 @@ def main() -> None:
     output_csv = "pnl_all_users.csv"
     end_block_override = None
     start = WINDOW_START
+    entry_exit = "--entry-exit" in args
+    if entry_exit:
+        args.remove("--entry-exit")
     while "--out" in args or "--end-block" in args or "--start" in args:
         if "--out" in args:
             i = args.index("--out")
@@ -353,6 +374,34 @@ def main() -> None:
             market_events[idx] = (lt_t, g_t, yb_t)
         _save_pickle(events_path, market_events)
         _log(f"Saved events to {events_path}")
+
+    # Optional: LT Deposit / Withdraw amounts inside the window, for the cost of
+    # entering and exiting (mostly pool fees on imbalanced adds / removes)
+    market_flows: dict[int, list[tuple[int, str, str, int, int]]] = {}
+    if entry_exit:
+        flows_path = os.path.join(
+            CACHE_DIR, f"flows_{'_'.join(map(str, market_indices))}"
+                       f"_from_{window_block}_to_{end_block}.pkl")
+        market_flows = _load_pickle(flows_path)
+        if market_flows is not None:
+            _log(f"Loaded cached Deposit/Withdraw events from {flows_path}")
+        else:
+            market_flows = {}
+            for idx, c in ctx_by_idx.items():
+                logs = fetch_logs_chunked(
+                    client, c["lt_addr"], [[DEPOSIT_TOPIC, WITHDRAW_TOPIC]],
+                    c["pnl_from"] + 1, end_block, f"M{idx} LT.Deposit/Withdraw")
+                recs = []
+                for lg in logs:
+                    is_dep = lg["topics"][0] == bytes.fromhex(DEPOSIT_TOPIC[2:])
+                    owner = topic_to_addr(lg["topics"][2 if is_dep else 3].hex())
+                    assets = int.from_bytes(lg["data"][:32], "big")
+                    shares = int.from_bytes(lg["data"][32:64], "big")
+                    recs.append((lg["blockNumber"], "dep" if is_dep else "wd", owner,
+                                 assets, shares))
+                market_flows[idx] = recs
+            _save_pickle(flows_path, market_flows)
+            _log(f"Saved Deposit/Withdraw events to {flows_path}")
 
     # Per-market user_deltas / user_yb. Excluded addresses (NOT real users):
     #   - 0x0                mint/burn pseudo-address
@@ -644,6 +693,37 @@ def main() -> None:
         user_yb = market_user_yb[idx]
         n_idle = 0
         yb_attributed = 0
+        v1 = version(idx) == "v1"
+
+        # Entry/exit cost inputs: this market's Deposit/Withdraw events by owner,
+        # minus same-block round trips (the owner both mints and burns LT in that
+        # block: flash-loan bots, whose exit often emits no Withdraw at all)
+        user_flows: dict[str, list] = defaultdict(list)
+        n_round = n_excl = n_nosample = 0
+        unattributed = 0.0
+        if entry_exit:
+            zero = b"\x00" * 32
+            minted, burned = set(), set()
+            for lg in market_events[idx][0]:
+                b = lg["blockNumber"]
+                if b <= pnl_from:
+                    continue
+                if lg["topics"][1] == zero:
+                    minted.add((topic_to_addr(lg["topics"][2].hex()), b))
+                if lg["topics"][2] == zero:
+                    burned.add((topic_to_addr(lg["topics"][1].hex()), b))
+            round_trip = minted & burned
+            excl = {ZERO_ADDR, c["market"].staker.lower(), c["market"].lt.lower(),
+                    fee_dist, *EXCLUDED_WALLETS}
+            for b, kind, owner, assets, shares in market_flows.get(idx, []):
+                if (owner, b) in round_trip:
+                    n_round += 1
+                elif owner in excl:
+                    n_excl += 1
+                elif b not in cache:
+                    n_nosample += 1
+                else:
+                    user_flows[owner].append((b, kind, assets, shares))
 
         for user, deltas in tqdm(user_deltas.items(),
                                  desc=f"M{idx} {sym}", unit="user", leave=False):
@@ -738,8 +818,27 @@ def main() -> None:
             yb_pend0_btc = (yb_pend0_crvusd * btc_scale / cm0["btc"]
                             if cm0["btc"] > 0 else 0)
 
+            # Entry/exit cost: assets paid vs the shares' value at the deposit
+            # block, and shares' value vs assets received at the withdrawal
+            # block, both on the marks the PnL views use (positive = paid)
+            dep_r = dep_p = wd_r = wd_p = 0.0
+            deposited = withdrawn = 0
+            for b, kind, assets, shares in user_flows.get(user, ()):
+                cm = cache[b][idx]
+                v_r = shares * cm["pw"] / PROBE_LT
+                v_p = shares * cm["pps"] * pps_factor
+                if kind == "dep":
+                    dep_r += assets - v_r
+                    dep_p += assets - v_p
+                    deposited += assets
+                else:
+                    wd_r += v_r - assets
+                    wd_p += v_p - assets
+                    withdrawn += assets
+
             if max_pos <= 0 and yb_recv_atomic == 0 and yb_pend_atomic == 0:
                 n_idle += 1  # nothing held and no YB inside the window
+                unattributed += abs(dep_r + wd_r if v1 else dep_p + wd_p)
                 continue
             yb_attributed += yb_recv_atomic
 
@@ -755,7 +854,7 @@ def main() -> None:
             net_redem = pnl_lt_redem_btc + pnl_g_redem_btc + yb_btc
             net_pps = pnl_lt_pps_btc + pnl_g_pps_btc + yb_btc
 
-            rows.append({
+            row = {
                 "market": idx,
                 "version": version(idx),
                 "symbol": sym,
@@ -774,14 +873,32 @@ def main() -> None:
                 "yb_value_in_asset": yb_btc,
                 "net_pnl_redem": net_redem,
                 "net_pnl_pps": net_pps,
-                "net_pnl": net_redem if version(idx) == "v1" else net_pps,
-            })
+                "net_pnl": net_redem if v1 else net_pps,
+            }
+            if entry_exit:
+                ee_r = (dep_r + wd_r) / btc_scale
+                ee_p = (dep_p + wd_p) / btc_scale
+                row.update({
+                    "deposited": deposited / btc_scale,
+                    "withdrawn": withdrawn / btc_scale,
+                    "entry_cost": (dep_r if v1 else dep_p) / btc_scale,
+                    "exit_cost": (wd_r if v1 else wd_p) / btc_scale,
+                    "entry_exit_cost_redem": ee_r,
+                    "entry_exit_cost_pps": ee_p,
+                    "entry_exit_cost": ee_r if v1 else ee_p,
+                    "net_pnl_after_entry_exit": row["net_pnl"] - (ee_r if v1 else ee_p),
+                })
+            rows.append(row)
 
         # YB that left the gauge in the window to an address that never held
         # this market's LT/gauge shares is not attributed to anyone
         yb_out = sum(a for recs in user_yb.values() for b, a in recs if b > pnl_from)
         _log(f"  M{idx}: {n_idle} users idle in the window; YB claimed in window "
              f"{yb_out / 1e18:,.0f}, attributed {yb_attributed / 1e18:,.0f}")
+        if entry_exit:
+            _log(f"  M{idx}: Deposit/Withdraw events skipped: {n_round} same-block round "
+                 f"trips, {n_excl} by excluded owners, {n_nosample} unsampled; "
+                 f"|cost| on idle owners (unattributed) {unattributed / btc_scale:,.4f} {sym}")
 
     df = pl.DataFrame(rows).sort(["market", "max_pos"], descending=[False, True])
     df.write_csv(output_csv)
@@ -799,6 +916,10 @@ def main() -> None:
                      pl.col("yb_earned").sum().alias("Σ yb_earned"),
                      pl.col("yb_pending_start").sum().alias("Σ yb_pend_start"),
                      pl.col("yb_value_in_asset").sum().alias("Σ yb_in_asset"),
+                     *([pl.col("entry_cost").sum().alias("Σ entry_cost"),
+                        pl.col("exit_cost").sum().alias("Σ exit_cost"),
+                        pl.col("net_pnl_after_entry_exit").sum().alias("Σ net_after_ee")]
+                       if entry_exit else []),
                  ])
                  .sort("market"))
     pl.Config.set_tbl_rows(20)
