@@ -385,6 +385,34 @@ def fetch_tx_transfers(tx_hashes, watch: set[str], path: str) -> dict[str, list]
     return got
 
 
+def fill_failed_samples(cache: dict, blocks, deploy: dict[int, int]) -> dict[int, dict]:
+    """Repair failed samples in place; returns {market: {metric: [blocks filled]}}.
+
+    A failed sub-call decodes as 0, which would book a fake -100% / +100% move
+    (and a whole-position fake PnL for anyone whose balance changes at that
+    block). preview_withdraw reverts right after each launch, while the LT is
+    still empty (pricePerShare there ~1.00002). From each market's deploy block
+    on, the last good value is carried forward and the leading failures take
+    the first good value. Only the in-memory copy changes (entries are
+    replaced, not mutated), so a cache saved before stays raw.
+    """
+    out: dict[int, dict] = {}
+    for idx, start in deploy.items():
+        live = [b for b in blocks if b >= start]
+        out[idx] = defaultdict(list)
+        for k in ("pps", "pw", "cta", "btc"):
+            vals = [cache[b][idx][k] for b in live]
+            first = next((v for v in vals if v), 0)
+            last = first
+            for b, v in zip(live, vals):
+                if v:
+                    last = v
+                elif last:
+                    cache[b][idx] = {**cache[b][idx], k: last}
+                    out[idx][k].append(b)
+    return out
+
+
 def _decode_transfer(lg):
     sender = topic_to_addr(lg["topics"][1].hex())
     receiver = topic_to_addr(lg["topics"][2].hex())
@@ -719,29 +747,14 @@ def main() -> None:
     if found_pps:
         _drop_superseded(found_pps[0], pps_path)
 
-    # A failed sub-call decodes as 0, which would book a fake -100% / +100% move
-    # (and a whole-position fake PnL for anyone whose balance changes at that
-    # block). preview_withdraw reverts right after each launch, while the LT is
-    # still empty (pricePerShare there ~1.00002). Fill failed samples from the
-    # market's deploy on: carry the last good value forward, and back-fill the
-    # leading ones with the first good value.
+    filled = fill_failed_samples(cache, sorted_blocks,
+                                 {i: c["start_block"] for i, c in ctx_by_idx.items()})
     for idx, c in ctx_by_idx.items():
-        live = [b for b in sorted_blocks if b >= c["start_block"]]
-        filled = defaultdict(int)
-        for k in ("pps", "pw", "cta", "btc"):
-            vals = [cache[b][idx][k] for b in live]
-            first = next((v for v in vals if v), 0)
-            last = first
-            for b, v in zip(live, vals):
-                if v:
-                    last = v
-                elif last:
-                    cache[b][idx] = {**cache[b][idx], k: last}  # leave the cached copy intact
-                    filled[k] += b >= c["pnl_from"]
-        filled = {k: n for k, n in filled.items() if n}
-        if filled:
-            _log(f"  M{idx}: filled failed samples in the window "
-                 f"(of {sum(b >= c['pnl_from'] for b in live)} blocks): {filled}")
+        n = {k: sum(b >= c["pnl_from"] for b in bs) for k, bs in filled[idx].items()}
+        n = {k: v for k, v in n.items() if v}
+        if n:
+            _log(f"  M{idx}: filled failed samples in the window (of "
+                 f"{sum(b >= c['pnl_from'] for b in sorted_blocks)} blocks): {n}")
 
     _stage("Stage 3/4: pending YB rewards at end_block and window start (Multicall3)")
     # Per-market preview_claim selector — function ABI is identical across

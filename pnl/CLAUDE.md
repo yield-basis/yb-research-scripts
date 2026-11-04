@@ -29,10 +29,15 @@ The scripts form a DAG, not a single entry point. The usual order:
    refresh: it goes to the finalized head and only fetches what's new (~1 min).
 2. `scripts/classify_users.py` → `pnl_all_users_classified.csv`
    (adds `addr_type` + `has_rescue` for each address)
-3. `scripts/btc_time_integral.py` → `btc_time_integral.csv`
-   (per-user BTC×blocks integral since `AIRDROP_1_BLOCK`; reuses `cache/`)
-4. `scripts/yb_distribution.py` → `yb_distribution.csv`
-   (combines the two CSVs above into a YB-token allocation)
+3. `scripts/value_integral.py` → `value_integral.csv` (each user's share of
+   all users' USD value integrated over time since `AIRDROP_1_BLOCK`, in
+   days, all markets; reads step 1's newest caches, run it right after).
+   `scripts/btc_time_integral.py` → `btc_time_integral.csv` is the older
+   BTC×blocks version for markets 3–6, kept as a May snapshot.
+4. `scripts/yb_distribution.py` → `yb_distribution.csv` (example YB
+   allocation: half to losers ∝ |`net_pnl_after_entry_exit_usd`| from
+   `pnl_per_address_usd.csv`, half to everyone ∝ `days` from
+   `value_integral.csv`; warns if their end blocks differ)
 5. `scripts/plot_pnl_histogram.py [--no-show]` → `pnl_histogram_net.png` +
    `pnl_per_user.csv` (per-user distribution, summed over markets in BTC-eq;
    `--after-entry-exit` for net PnL after entry/exit costs, `--pps` /
@@ -117,6 +122,13 @@ Required env vars (see `.env.example`):
   window's ends (where pricePerShare and redemption agree within ~1% for
   v2/v3), which matters because **v2 pricePerShare also overshot redemption
   in the Feb 2026 lag** (a 10.556 cbBTC withdrawal marked at 12.52).
+- **Value integral invariant.** `value_integral.py` values every position at
+  redemption in USD at each sampled block, so `days` = ∫ V_user / V_all dt
+  must add up to the window length exactly (the total comes from per-market
+  running totals, each user's part from its own trajectory), and users' LT /
+  gauge shares must equal totalSupply minus excluded holders on chain at
+  both ends. The script refuses to write the CSV otherwise. Block
+  timestamps are cached in `cache/block_timestamps.pkl`.
 - **Fetch speed.** `all_users_pnl.py` asks for `LOGS_CHUNK` (default 10000)
   blocks per eth_getLogs and runs 8 POSTs in parallel, also for state
   sampling; set `LOGS_CHUNK=1000` on public RPCs that cap the range. Failed
