@@ -5,9 +5,25 @@ description = "Per-user PnL analysis of Yield Basis BTC markets"
 requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.10.9",
-    "polars>=1.40.1",
+    "polars>=1.40.1,<2",
     "pyqt6>=6.11.0",
     "python-dotenv>=1.2.2",
     "tqdm>=4.67.3",
-    "web3>=7.16.0",
+    "web3>=7.16.0,<8",
+]
+
+[tool.uv]
+# Floors at the first releases fixing the advisories flagged by `uv audit`
+# (all transitive: aiohttp/multidict/idna/urllib3/certifi via web3, pillow via
+# matplotlib).
+constraint-dependencies = [
+    "aiohttp>=3.14.4",
+    "certifi>=2026.10.18",
+    "idna>=3.15",
+    "multidict>=6.9.1",
+    "pillow>=13.0.0",
+    "urllib3>=2.8.0",
+    # pyunormalize 18 breaks web3 7's ENS normalization (NFC gets a list), and
+    # yb.py resolves the factory via ENS
+    "pyunormalize<18",
 ]
