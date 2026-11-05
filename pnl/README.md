@@ -20,6 +20,8 @@ data over JSON-RPC.
 ```sh
 uv run python scripts/all_users_pnl.py --entry-exit   # PnL per address
 uv run python scripts/value_integral.py               # share of value over time
+uv run python scripts/value_integral_v3cap.py         # variant: v2 capped by v3, no v1
+uv run python scripts/compare_value_integrals.py      # who drops out between the two
 uv run python scripts/yb_distribution.py              # example YB allocation
 uv run python scripts/plot_pnl_histogram.py --no-show --after-entry-exit   # optional chart
 ```
@@ -37,6 +39,8 @@ refreshed CSVs and PNGs together with any code change that produced them.
 | `pnl_per_address_usd.csv` | one per address | **`net_pnl_after_entry_exit_usd`** (the number to use), `net_pnl_usd`, `entry_exit_cost_usd`, `position_pnl_usd`, `yb_usd`, `avg_pos_usd`, `markets`, `hybrid_vault`, `as_of_block` |
 | `pnl_all_users.csv` | one per (market, address) | the same in the market's asset (BTC or ETH), both PnL views, YB amounts, deposits / withdrawals, USD columns |
 | `value_integral.csv` | one per address | `days` (∫ own value / all users' value dt), `fraction` (= days / window length), `markets`, `from_block`, `to_block` |
+| `value_integral_v3cap.csv` | one per address | as above for the variant, plus `days_v2`, `days_v3`, `v3_avg_BTC` and `v3_avg_WETH` (the caps) |
+| `value_integral_compare.csv` | one per address of either measurement | `status` (dropped, reduced, increased), `reason`, old and new shares, what the wallet still holds in v1 and v2, PnL |
 | `yb_distribution.csv` | one per address | `yb_compensation`, `yb_proportional`, `yb_total` (example amounts set at the top of the script) |
 | `pnl_per_user.csv`, `pnl_histogram_*.png` | | per-user totals in BTC-equivalent and the histograms (`plot_pnl_histogram.py`) |
 
@@ -76,6 +80,17 @@ refreshed CSVs and PNGs together with any code change that produced them.
     holders, on chain, at both ends of the window.
 
   If either check fails, the script writes no CSV.
+
+- **v3-capped value integral.** Same window and valuation, but v1 is not
+  counted, and v2 counts only for what the user carried into v3. Per user and
+  asset the weight is `min(V2(t), A3) + V3(t)`, taken in the asset and then
+  converted to USD. `A3` is the user's average v3 value in that asset over the
+  v3 markets' whole life, counting time with nothing deposited as zero. There
+  are two assets for this: BTC (WBTC, cbBTC and tBTC added together 1:1) and
+  WETH, so moving between BTC wrappers counts as migrating. A wallet that
+  never held v3 gets nothing, and a small v3 deposit gives a small v2
+  allocation. `days` add up to the time with
+  something countable, from the first eligible v2 deposit on.
 
 ## Other scripts
 

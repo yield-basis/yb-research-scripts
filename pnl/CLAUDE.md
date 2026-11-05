@@ -1,8 +1,7 @@
 # pnl/ — Yield Basis per-user PnL analysis
 
 Per-user PnL and YB-token distribution analysis across Yield Basis markets
-(all of them, v1 0–2, v2 3–6, v3 7–10, for the PnL; the YB distribution
-scripts still use 3–6). Pulls events + on-chain state directly via JSON-RPC,
+(all of them: v1 0–2, v2 3–6, v3 7–10). Pulls events + on-chain state directly via JSON-RPC,
 caches intermediate artifacts, and emits CSVs / histograms.
 
 ## Layout
@@ -32,6 +31,10 @@ The scripts form a DAG, not a single entry point. The usual order:
 3. `scripts/value_integral.py` → `value_integral.csv` (each user's share of
    all users' USD value integrated over time since `AIRDROP_1_BLOCK`, in
    days, all markets; reads step 1's newest caches, run it right after).
+   `scripts/value_integral_v3cap.py` → `value_integral_v3cap.csv` is the
+   variant counting v2 only up to what the user holds on average in v3, and
+   v1 not at all; `scripts/compare_value_integrals.py` →
+   `value_integral_compare.csv` shows who drops out between the two.
    `scripts/btc_time_integral.py` → `btc_time_integral.csv` is the older
    BTC×blocks version for markets 3–6, kept as a May snapshot.
 4. `scripts/yb_distribution.py` → `yb_distribution.csv` (example YB
@@ -129,6 +132,17 @@ Required env vars (see `.env.example`):
   gauge shares must equal totalSupply minus excluded holders on chain at
   both ends. The script refuses to write the CSV otherwise. Block
   timestamps are cached in `cache/block_timestamps.pkl`.
+- **v3-capped integral.** `value_integral_v3cap.py` weighs a user at
+  Σ_asset [min(V2(t), A3) + V3(t)], in the asset and then USD; A3 is the
+  user's average V3 over the v3 markets' whole life (zero while not
+  deposited). The cap is per user on BTC as a whole (WBTC, cbBTC and tBTC
+  added 1:1) and on WETH: moving between BTC wrappers counts as migrating,
+  though LTMigrator itself stays within one token. When the cap binds, the
+  v2 positions scale down together and each keeps its own pool price. The
+  cap is non-linear, so v2 is integrated per user over the grid instead of
+  through the J index. Any v3 deposit keeps a wallet in, so drop-outs are
+  exactly the wallets that never held v3. Σ days is the time with something
+  countable (357 days, not the 385-day window).
 - **Fetch speed.** `all_users_pnl.py` asks for `LOGS_CHUNK` (default 10000)
   blocks per eth_getLogs and runs 8 POSTs in parallel, also for state
   sampling; set `LOGS_CHUNK=1000` on public RPCs that cap the range. Failed
