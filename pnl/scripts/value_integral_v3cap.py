@@ -6,8 +6,10 @@
 per user, for BTC (WBTC, cbBTC and tBTC together, 1:1) and for WETH:
     V2(t), V3(t)  redemption value in the asset, unstaked LT plus gauge shares,
                   over the asset's v2 / v3 markets at t
-    A3            V3 averaged over the v3 markets' whole life (deploy to the
-                  end block, time with nothing deposited counts as zero)
+    A3            V3 averaged from the user's first v3 deposit in that asset
+                  to the end block; time after that with nothing deposited
+                  counts as zero, so leaving early lowers it, arriving late
+                  does not
 
 The min is taken in the asset. When it binds, all the user's v2 positions in
 that asset scale down by the same factor, and each converts to USD at its own
@@ -24,7 +26,7 @@ Checks (no CSV is written if one fails):
     from running totals, each user's part from its own trajectory.
   - at every sampled block, all users' uncapped v2 value from their
     trajectories equals the running totals; the cap only applies on top of it.
-  - Σ users' A3 per market equals the market's average users' value.
+  - Σ users' ∫V3 dt per market equals the market's ∫ users' value dt.
   - users' LT / gauge shares vs the chain at both ends.
 
 Run all_users_pnl.py first. value_integral.csv and its script stay as they are.
@@ -83,24 +85,30 @@ def compute(w, capped: bool = True):
     for i in v2:
         v2_of[family[i]].append(i)
 
-    # A3: each user's average v3 value in the asset over the market's life
-    a3: dict[tuple[str, str], float] = defaultdict(float)
+    # A3: each user's average v3 value in the asset, from their first v3 deposit
+    # in it to the end block
+    held: dict[tuple[str, str], float] = defaultdict(float)  # ∫ V3 dt
+    since: dict[tuple[str, str], int] = {}  # step of the first v3 deposit
     a3_err = 0.0
     for i in v3:
-        k0 = w.pos[ctx[i]["deploy"]] if ctx[i]["deploy"] > w.start_block else 0
-        span = dt[k0:].sum()
         i_lt = np.concatenate(([0.0], np.cumsum(r[i] * dt)))
         i_g = np.concatenate(([0.0], np.cumsum(rg[i] * dt)))
         market_sum = 0.0
         for user, user_segs in segs[i].items():
-            avg = sum(lt * (i_lt[kb] - i_lt[ka]) + g * (i_g[kb] - i_g[ka])
-                      for ka, kb, lt, g in user_segs) / span
-            a3[(user, family[i])] += avg
-            market_sum += avg
+            if not user_segs:
+                continue
+            key = (user, family[i])
+            part = sum(lt * (i_lt[kb] - i_lt[ka]) + g * (i_g[kb] - i_g[ka])
+                       for ka, kb, lt, g in user_segs)
+            held[key] += part
+            since[key] = min(since.get(key, n), user_segs[0][0])
+            market_sum += part
         tvl = (np.array(w.tot_lt[i][:n], dtype=float) * r[i]
                + np.array(w.tot_g[i][:n], dtype=float) * rg[i])
-        expect = (tvl * dt).sum() / span
+        expect = (tvl * dt).sum()
         a3_err = max(a3_err, abs(market_sum - expect) / expect)
+    time_left = np.concatenate((np.cumsum(dt[::-1])[::-1], [0.0]))  # from step k to the end
+    a3 = {key: v / time_left[since[key]] for key, v in held.items()}
 
     def capped_usd(user: str, fam: str) -> tuple[int, np.ndarray]:
         """(first step, USD weight per step) of the user's v2 positions in fam:
@@ -160,6 +168,7 @@ def compute(w, capped: bool = True):
                 held_in[user].add(i)
 
     return {"days_v2": days_v2, "days_v3": days_v3, "held_in": held_in, "a3": a3,
+            "v3_from": {key: grid[k] for key, k in since.items()},
             "expect": float(dt[counted].sum()), "first": grid[int(np.argmax(counted))],
             "a3_err": a3_err, "v2_err": v2_err, "families": sorted(v2_of),
             "per_usd": per_usd}
@@ -183,7 +192,7 @@ def main() -> None:
     print(f"Σ days over users = {total:.9f}; time with countable value = {expect:.9f} days "
           f"(relative error {abs(total - expect) / expect:.1e})")
     print(f"all users' uncapped v2 value vs running totals, worst block: {res['v2_err']:.1e}")
-    print(f"Σ users' v3 averages vs market averages, worst market: {res['a3_err']:.1e}")
+    print(f"Σ users' ∫V3 dt vs markets' ∫ value dt, worst market: {res['a3_err']:.1e}")
     ok = (abs(total - expect) <= 1e-9 * expect and res["v2_err"] <= 1e-9
           and res["a3_err"] <= 1e-9)
     ok &= V.check_chain(w)
@@ -197,6 +206,8 @@ def main() -> None:
               "days_v3": [days_v3.get(u, 0.0) for u in users],
               **{f"v3_avg_{fam}": [res["a3"].get((u, fam), 0.0) for u in users]
                  for fam in res["families"]},
+              **{f"v3_from_{fam}": [res["v3_from"].get((u, fam)) for u in users]
+                 for fam in res["families"]},
               "markets": [" ".join(map(str, sorted(res["held_in"][u]))) for u in users],
               "hybrid_vault": [" ".join(w.vaults_of.get(u, ())) or None for u in users],
           })
@@ -204,7 +215,8 @@ def main() -> None:
                         pl.lit(w.start_block).alias("from_block"),
                         pl.lit(w.end_block).alias("to_block"))
           .select("user", "days", "fraction", "days_v2", "days_v3",
-                  *[f"v3_avg_{f}" for f in res["families"]], "markets", "hybrid_vault",
+                  *[f"v3_avg_{f}" for f in res["families"]],
+                  *[f"v3_from_{f}" for f in res["families"]], "markets", "hybrid_vault",
                   "from_block", "to_block"))
     df.write_csv(output_csv)
     print(f"\nWrote {len(df)} users to {output_csv}")

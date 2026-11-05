@@ -37,10 +37,12 @@ The scripts form a DAG, not a single entry point. The usual order:
    `value_integral_compare.csv` shows who drops out between the two.
    `scripts/btc_time_integral.py` → `btc_time_integral.csv` is the older
    BTC×blocks version for markets 3–6, kept as a May snapshot.
-4. `scripts/yb_distribution.py` → `yb_distribution.csv` (example YB
-   allocation: half to losers ∝ |`net_pnl_after_entry_exit_usd`| from
+4. `scripts/yb_allocation.py` → `yb_allocation_{full,v3cap,difference}.csv`:
+   `YB_TOTAL` per wallet in proportion to `days` in each integral, no loss
+   adjustment. `scripts/yb_distribution.py` → `yb_distribution.csv` is the
+   older example allocation (half to losers ∝ |`net_pnl_after_entry_exit_usd`| from
    `pnl_per_address_usd.csv`, half to everyone ∝ `days` from
-   `value_integral.csv`; warns if their end blocks differ)
+   `value_integral.csv`; warns if their end blocks differ).
 5. `scripts/plot_pnl_histogram.py [--no-show]` → `pnl_histogram_net.png` +
    `pnl_per_user.csv` (per-user distribution, summed over markets in BTC-eq;
    `--after-entry-exit` for net PnL after entry/exit costs, `--pps` /
@@ -134,9 +136,11 @@ Required env vars (see `.env.example`):
   timestamps are cached in `cache/block_timestamps.pkl`.
 - **v3-capped integral.** `value_integral_v3cap.py` weighs a user at
   Σ_asset [min(V2(t), A3) + V3(t)], in the asset and then USD; A3 is the
-  user's average V3 over the v3 markets' whole life (zero while not
-  deposited). The cap is per user on BTC as a whole (WBTC, cbBTC and tBTC
-  added 1:1) and on WETH: moving between BTC wrappers counts as migrating,
+  user's average V3 from their own first v3 deposit in that asset to the end
+  block (zero while not deposited after that), so a late migrator is not
+  penalised and an early leaver is; a deposit just before the end block
+  therefore earns a near-full cap. The cap is per user on BTC as a whole
+  (WBTC, cbBTC and tBTC added 1:1) and on WETH: moving between BTC wrappers counts as migrating,
   though LTMigrator itself stays within one token. When the cap binds, the
   v2 positions scale down together and each keeps its own pool price. The
   cap is non-linear, so v2 is integrated per user over the grid instead of
