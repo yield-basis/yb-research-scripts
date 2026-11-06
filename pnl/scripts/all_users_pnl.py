@@ -112,6 +112,7 @@ from web3 import Web3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from yb import (  # noqa: E402
     EXCLUDED_WALLETS,
+    NON_USER_CONTRACTS,
     hybrid_vault_owners,
     WINDOW_START,
     all_markets,
@@ -1172,6 +1173,7 @@ def main() -> None:
                  f"{st['unresolved']} left on the router; |cost| on idle owners "
                  f"(unattributed) {unattributed / btc_scale:,.4f} {sym}")
 
+    rows = [r for r in rows if r["user"] not in NON_USER_CONTRACTS]
     df = pl.DataFrame(rows).sort(["market", "max_pos"], descending=[False, True])
     df.write_csv(output_csv)
     _stage(f"Done — wrote {len(df)} rows to {output_csv}")

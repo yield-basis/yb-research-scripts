@@ -19,6 +19,7 @@ data over JSON-RPC.
 
 ```sh
 uv run python scripts/all_users_pnl.py --entry-exit   # PnL per address
+uv run python scripts/classify_users.py               # finds contracts that are not users
 uv run python scripts/value_integral.py               # share of value over time
 uv run python scripts/value_integral_v3cap.py         # variant: v2 capped by v3, no v1
 uv run python scripts/compare_value_integrals.py      # who drops out between the two
@@ -29,8 +30,12 @@ uv run python scripts/plot_pnl_histogram.py --no-show --after-entry-exit   # opt
 Run them in this order. `all_users_pnl.py` goes up to the latest finalized
 block and only fetches what is new since its last run, which takes about a
 minute. The first run, with an empty `cache/`, takes about 15 minutes.
-`value_integral.py` reads the caches that run just wrote. Commit the
-refreshed CSVs and PNGs together with any code change that produced them.
+`value_integral.py` reads the caches that run just wrote. If `classify_users.py`
+reports new addresses, run `all_users_pnl.py` once more before going on, so
+they get no share. A new contract starts out with no share. To give it one,
+show on a fork that it can move YB sent to it, then move it from
+`non_user_contracts.csv` to `contract_recipients.csv`. Commit the refreshed CSVs
+and PNGs together with any code change that produced them.
 
 ## Outputs
 
@@ -43,6 +48,8 @@ refreshed CSVs and PNGs together with any code change that produced them.
 | `value_integral_compare.csv` | one per address of either measurement | `status` (dropped, reduced, increased), `reason`, old and new shares, what the wallet still holds in v1 and v2, PnL |
 | `yb_allocation_full.csv`, `yb_allocation_v3cap.csv` | one per wallet of that variant | `yb` (1,406,250 YB in total, in proportion to `days`, no loss adjustment), `fraction`, `days`, `markets`, `hybrid_vault` |
 | `yb_allocation_difference.csv` | one per wallet of either | `yb_full`, `yb_v3cap`, `yb_difference` (v3cap − full), `status`, biggest change first |
+| `non_user_contracts.csv` | one per contract | `address`, `addr_type`: contracts that get no share (see Users below); `classify_users.py` only ever adds to it |
+| `contract_recipients.csv` | one per contract | `address`, `name`, `reaches_yb_by`: contracts that keep their share because they can move YB sent to them; kept by hand |
 | `yb_distribution.csv` | one per address | older example with a loss compensation bucket: `yb_compensation`, `yb_proportional`, `yb_total` (`scripts/yb_distribution.py`, amounts set at the top of it) |
 | `pnl_per_user.csv`, `pnl_histogram_*.png` | | per-user totals in BTC-equivalent and the histograms (`plot_pnl_histogram.py`) |
 
@@ -55,8 +62,18 @@ refreshed CSVs and PNGs together with any code change that produced them.
   same day).
 - **Users.** All addresses holding LT or gauge shares, whether staked or
   not, except protocol contracts: gauges, LTs, the fee receiver and the
-  wallets in `EXCLUDED_WALLETS`. A **HybridVault counts as its owner**: its
-  positions, YB and deposits / withdrawals are added to the owner's own.
+  wallets in `EXCLUDED_WALLETS`. An address counts if it is an EOA (EIP-7702
+  ones included), a Safe, or a contract in `contract_recipients.csv`: one shown
+  on a fork to be able to move YB sent to it, such as the Beefy and Giddy
+  strategies and owner-run position managers. Every other contract is in
+  `non_user_contracts.csv` and has no row in any output: pools, lending
+  markets, zaps and other contracts that can't recover tokens, unverified
+  contracts, and any HybridVault one of them owns. The old FeeDistributor and
+  the DAO are there too: they could recover YB, but they are the protocol's own.
+  Zaps still pass users' deposits and withdrawals through to the users behind
+  them. A **HybridVault counts as its owner**: its positions, YB and deposits /
+  withdrawals are added to the owner's own, so anything due to the vault goes to
+  the owner.
 - **PnL** compares each position with simply holding the asset: balance ×
   change in share value, summed over every interval between balance changes,
   plus YB earned (YB received, plus YB claimable at the end). v1 is valued
@@ -100,8 +117,11 @@ refreshed CSVs and PNGs together with any code change that produced them.
 - `scripts/debug_user.py 0xADDR MARKET` (`debug_user_pps.py` for
   `pricePerShare`): one address in one market, event timeline and integrated
   PnL, straight from the chain. Passing a vault follows its owner.
-- `scripts/classify_users.py`: labels each address (EOA, Safe, other contract)
-  and whether a contract can rescue tokens → `pnl_all_users_classified.csv`.
+- `scripts/classify_users.py`: labels each address (EOA, Safe, pool, other
+  contract) and whether a contract can rescue tokens →
+  `pnl_all_users_classified.csv`, and adds non-users to
+  `non_user_contracts.csv`, leaving out `contract_recipients.csv`. Use
+  `--block N` to match a pinned end block.
 - `scripts/btc_time_integral.py`: the older BTC×blocks integral for markets
   3–6 (`btc_time_integral.csv` is a May 2026 snapshot).
 - `traverse.py`: lists every market from the factory. `scripts/bench_rpc.py`:

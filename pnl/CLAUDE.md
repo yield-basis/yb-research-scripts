@@ -26,8 +26,11 @@ The scripts form a DAG, not a single entry point. The usual order:
    `pnl_per_address_usd.csv` (one row per address, all markets in USD, with
    the as-of block; use `net_pnl_after_entry_exit_usd`). Re-running it is the
    refresh: it goes to the finalized head and only fetches what's new (~1 min).
-2. `scripts/classify_users.py` → `pnl_all_users_classified.csv`
-   (adds `addr_type` + `has_rescue` for each address)
+2. `scripts/classify_users.py [--block N]` → `pnl_all_users_classified.csv`
+   (adds `addr_type` + `has_rescue` for each address) and adds everything that
+   is neither an EOA, a Safe nor in `contract_recipients.csv` to
+   `non_user_contracts.csv`. If it reports new addresses, re-run step 1 before
+   going on.
 3. `scripts/value_integral.py` → `value_integral.csv` (each user's share of
    all users' USD value integrated over time since `AIRDROP_1_BLOCK`, in
    days, all markets; reads step 1's newest caches, run it right after).
@@ -71,9 +74,28 @@ Required env vars (see `.env.example`):
 ## Conventions / gotchas
 
 - **User-set definition.** "Users" in any aggregation excludes: gauge, LT,
-  `factory.fee_receiver()`, `ZERO_ADDR`, and `EXCLUDED_WALLETS` (defined in
-  `yb.py`). When adding a new aggregation script, apply the same filter or
-  totals will be inflated by non-user contracts.
+  `factory.fee_receiver()`, `ZERO_ADDR`, `EXCLUDED_WALLETS` and
+  `NON_USER_CONTRACTS` (both in `yb.py`). When adding a new aggregation script,
+  apply the same filter or totals will be inflated by non-user contracts.
+- **`NON_USER_CONTRACTS`** (`non_user_contracts.csv`, kept by
+  `classify_users.py`, which only adds to it). EOAs (EIP-7702 included), Safes
+  and `CONTRACT_RECIPIENTS` get a share; every other contract doesn't: pools,
+  lending markets, zaps, unverified contracts and HybridVaults they own, plus
+  the old FeeDistributor `0xd11b…7a90` (`fee_receiver()` now returns the fee
+  splitter, so it isn't caught by that check) and the DAO, which could recover
+  YB but are the protocol's own. **Don't add these to
+  `EXCLUDED_WALLETS`**: `all_users_pnl.py` must keep them during attribution and
+  only drop their rows at the end. Skipping them there loses the zaps' routing
+  (StakeZap is on the list) and thins the sampled blocks, which changes other
+  users' PnL. The value integrals do leave them out of every total.
+- **`CONTRACT_RECIPIENTS`** (`contract_recipients.csv`, kept by hand). Contracts
+  that keep their share because they can move YB sent to them: Beefy strategies
+  (harvest sells the whole YB balance into the vault), Giddy strategies, owner-run
+  position managers, Stake DAO contracts. Add one only after moving YB out of it
+  on a fork as its real controller; `has_rescue` alone isn't enough, because some
+  sweeps refuse YB (the `Wrapped syb-*` strategies do). When a recipient owns a
+  HybridVault, that vault must not be in `non_user_contracts.csv` either, or its
+  position is lost.
 - **HybridVaults belong to their owners.** A HybridVault (yb-core
   `contracts/HybridVault.vy`, factory `HYBRID_VAULT_FACTORY` in `yb.py`, one
   vault per owner, owner fixed at creation) holds LT / gauge shares, claims

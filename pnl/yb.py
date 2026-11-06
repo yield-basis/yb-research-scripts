@@ -68,6 +68,30 @@ EXCLUDED_WALLETS = [
 ]
 EXCLUDED_WALLETS = [a.lower() for a in EXCLUDED_WALLETS]
 
+
+def _addresses(csv_name: str) -> set[str]:
+    """First column of a CSV next to this file, empty if it isn't there."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv_name)
+    if not os.path.exists(path):
+        return set()
+    with open(path) as f:
+        return {line.split(",")[0].lower() for line in f.read().splitlines()[1:]}
+
+
+# Contracts that aren't a person's wallet or a Safe but can move YB sent to them,
+# each checked by hand on a fork: Beefy and Giddy strategies, position managers.
+# They keep their share, so classify_users.py leaves them out of the list below.
+CONTRACT_RECIPIENTS = _addresses("contract_recipients.csv")
+
+# Every other contract: pools, lending markets, zaps and anything unverified,
+# which can't get at YB or aren't shown to, plus the old FeeDistributor and the
+# DAO, which could but are the protocol's own. classify_users.py maintains the
+# list. They get no share of anything: all_users_pnl.py drops their rows and
+# the value integrals leave them out of every total. Unlike EXCLUDED_WALLETS
+# they stay in all_users_pnl.py's attribution, because zaps pass users' deposits
+# and withdrawals through and their balance changes set the sampled blocks.
+NON_USER_CONTRACTS = _addresses("non_user_contracts.csv")
+
 # HybridVaults (yb-core contracts/HybridVault.vy) hold LT / gauge shares, claim
 # YB and deposit / withdraw in their own name for one owner each, set once at
 # creation (HybridVaultFactory.create_vault: one vault per owner). PnL belongs

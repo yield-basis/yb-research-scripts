@@ -21,8 +21,8 @@ Time: block timestamps (cached in cache/block_timestamps.pkl). The value at
 each sampled block (every balance change of any market, from
 all_users_pnl.py's caches) holds until the next one.
 
-Users, as in all_users_pnl.py: excludes gauges, LTs, fee_receiver, 0x0 and
-EXCLUDED_WALLETS; a HybridVault counts as its owner.
+Users, as in all_users_pnl.py: excludes gauges, LTs, fee_receiver, 0x0,
+EXCLUDED_WALLETS and NON_USER_CONTRACTS; a HybridVault counts as its owner.
 
 Run all_users_pnl.py first (same markets): this reads its newest event and
 sample caches, and adds the start block's sample to them if missing.
@@ -52,6 +52,7 @@ import all_users_pnl as A  # noqa: E402
 from yb import (  # noqa: E402
     AIRDROP_1_BLOCK,
     EXCLUDED_WALLETS,
+    NON_USER_CONTRACTS,
     all_markets,
     block_at,
     fee_receiver,
@@ -210,7 +211,8 @@ def load_window(market_args: list[int], start: str | None, end_block: int | None
     excluded: dict[int, set[str]] = {}
     deltas: dict[int, dict[str, list]] = {}
     for idx, c in ctx.items():
-        excl = {A.ZERO_ADDR, c["gauge"].lower(), c["lt"].lower(), fee_dist, *EXCLUDED_WALLETS}
+        excl = {A.ZERO_ADDR, c["gauge"].lower(), c["lt"].lower(), fee_dist, *EXCLUDED_WALLETS,
+                *NON_USER_CONTRACTS}
         excluded[idx] = excl
         d: dict[str, list] = defaultdict(list)
         lt_t, g_t, _ = market_events[idx]

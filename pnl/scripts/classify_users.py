@@ -1,9 +1,10 @@
 """Classify each user in pnl_all_users.csv by address type at a given block.
 
 Categories:
-  - EOA            : no code at the address
+  - EOA            : no code at the address, or an EIP-7702 delegation (0xef0100…)
   - HybridVault    : answers to required_crvusd() (YB-HybridVault-specific view)
   - Safe           : answers to BOTH getThreshold() and VERSION() (Gnosis Safe)
+  - Pool           : answers to coins(0) or token0() (DEX pool)
   - Other          : has code but didn't match the above
 
 For contracts, we also scan the bytecode for PUSH4-prefixed selectors of
@@ -12,7 +13,12 @@ inCaseTokensGetStuck, etc.). The result populates `has_rescue`. Contracts
 with `addr_type=Other AND has_rescue=False` are stuck-prone — any token
 sent to them (e.g. YB rewards) cannot be extracted.
 
-Output: pnl_all_users_classified.csv (input + addr_type, has_rescue cols)
+Output: pnl_all_users_classified.csv (input + addr_type, has_rescue cols) and
+non_user_contracts.csv: every address found to be neither an EOA, a Safe nor in
+contract_recipients.csv. yb.py reads that list as NON_USER_CONTRACTS, so those
+addresses get no share of anything on the next run. The list only grows: an
+excluded address is gone from pnl_all_users.csv, so it could not be found again.
+A contract that can move YB sent to it moves to contract_recipients.csv by hand.
 
 Usage:
     uv run python scripts/classify_users.py [CSV_PATH] [--block BLOCK]
@@ -31,7 +37,7 @@ from tqdm import tqdm
 from web3 import Web3
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from yb import rpc_url, w3  # noqa: E402
+from yb import CONTRACT_RECIPIENTS, hybrid_vaults_of, rpc_url, w3  # noqa: E402
 
 load_dotenv()
 
@@ -181,6 +187,8 @@ def has_rescue(bytecode_hex: str) -> bool:
     return bool(all_push4_selectors(bytecode_hex) & RESCUE_SEL_SET)
 
 GETCODE_BATCH = 100      # JSON-RPC eth_getCode batch
+NON_USERS_CSV = "non_user_contracts.csv"
+REAL_USER_TYPES = ("EOA", "Safe")
 CONTRACTS_PER_MC = 50    # contracts per Multicall3 (each contributes 3 sub-calls)
 
 
@@ -201,6 +209,29 @@ def aggregate3_calldata(calls):
     """calls: list of (address-checksum, bool allowFailure, bytes callData)."""
     payload = abi_encode(["(address,bool,bytes)[]"], [calls])
     return "0x" + SEL_AGGREGATE3.hex() + payload.hex()
+
+
+def is_eoa_code(code: str) -> bool:
+    """No code, or an EIP-7702 delegation: a person's key still controls it."""
+    return code == "0x" or code.startswith("0xef0100")
+
+
+def update_non_users(types: dict[str, str], block: int) -> None:
+    """Adds every address that is neither an EOA, a Safe nor a contract recipient
+    to NON_USERS_CSV, with any HybridVault they own: a vault's position counts as
+    its owner's."""
+    known = (dict(pl.read_csv(NON_USERS_CSV).iter_rows())
+             if os.path.exists(NON_USERS_CSV) else {})
+    found = {a.lower(): t for a, t in types.items()
+             if t not in REAL_USER_TYPES and a.lower() not in CONTRACT_RECIPIENTS}
+    found |= {v.lower(): "HybridVault" for v in hybrid_vaults_of(list(found), block).values()}
+    new = found.keys() - known.keys()
+    merged = sorted({**known, **found}.items())
+    pl.DataFrame({"address": [a for a, _ in merged],
+                  "addr_type": [t for _, t in merged]}).write_csv(NON_USERS_CSV)
+    print(f"\n{NON_USERS_CSV}: {len(merged)} addresses, {len(new)} new")
+    if new:
+        print("New addresses: re-run all_users_pnl.py and everything after it")
 
 
 def main() -> None:
@@ -246,8 +277,8 @@ def main() -> None:
         pbar.update(len(chunk))
     pbar.close()
 
-    contracts = [a for a, c in code.items() if c != "0x"]
-    eoas = [a for a, c in code.items() if c == "0x"]
+    contracts = [a for a, c in code.items() if not is_eoa_code(c)]
+    eoas = [a for a, c in code.items() if is_eoa_code(c)]
     print(f"  → {len(eoas)} EOAs, {len(contracts)} contracts")
 
     # ---- Phase 2: Multicall3 probes for contracts ----
@@ -281,11 +312,11 @@ def main() -> None:
 
         for j, c in enumerate(cset):
             base = j * SUBCALLS
-            t_ok, _ = decoded[base + 0]
-            v_ok, _ = decoded[base + 1]
-            r_ok, _ = decoded[base + 2]
-            coins_ok, _ = decoded[base + 3]
-            tok0_ok, _ = decoded[base + 4]
+            # A contract whose fallback accepts anything also "succeeds", so
+            # the answer has to have the right shape: a word, or a string.
+            word = [ok and len(ret) == 32 for ok, ret in decoded[base:base + SUBCALLS]]
+            t_ok, r_ok, coins_ok, tok0_ok = word[0], word[2], word[3], word[4]
+            v_ok = decoded[base + 1][0] and len(decoded[base + 1][1]) >= 64
             if r_ok:
                 classification[c] = "HybridVault"
             elif t_ok and v_ok:
@@ -305,7 +336,7 @@ def main() -> None:
     for a in addrs_cs:
         c = code[a]
         proxy_map[a] = is_proxy_likely(c)
-        if c == "0x":
+        if is_eoa_code(c):
             rescue_map[a] = False  # EOA — N/A
         elif classification[a] in ("Safe", "HybridVault", "Pool"):
             # Safe / HybridVault: proxy-deployed with rescue in impl.
@@ -329,6 +360,7 @@ def main() -> None:
         out_csv = csv_path + ".classified"
     out.write_csv(out_csv)
     print(f"\nSaved {out_csv}")
+    update_non_users(classification, block)
 
     # Don't truncate addresses in the printed tables — they're 42 chars.
     pl.Config.set_fmt_str_lengths(50)
