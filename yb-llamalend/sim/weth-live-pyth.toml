@@ -1,0 +1,49 @@
+# yb-WETH under the policy that is live since Curve ownership vote 1525 and the YieldBasis rate/fee vote gated on it
+# (read on chain at block 26487413, 2026-11-24): one trajectory over the finalist inputs, 2025-03-24 .. 2026-11-09.
+#
+# Pool 0x656341Ef90b622c6634e0573772FfB7f3669b9f3, policy YBOraclizedPolicy 0xC4561F25034Bc70CED5f034E863dD150f2bA763a
+# (the line-by-line port of report_lean.hpp), Pyth Pro Crypto.ETH/USD (feed 2) on fixed_rate@1000ms:
+#   fee     base 60 bp, capture 0.80, fallback 200 bp, relax 90 s
+#   driver  EMA half-lives 5400 / 10800 s, trend gate 75 bp, step cap 50 bp, report lifetime 5400 s
+#   pool    A = 5, ma_time 600 s half-life (865 s e-fold), RPF 43%, donation share cap 10%, admin fee 0
+#   LevAMM  rate 570776255 / s = 1.80% on the crvUSD debt -> pool donation APY 0.90%; releverage fee 140 bp
+# Market: Binance ETH/USDT x USDC/USDT per 12 s slot; the arbitrageur and the LevAMM actor trade in crvUSD
+# (arb_price), fees value reports at the crvUSD aggregator (the tape's rate oracle), the driver observes USD reports
+# (driver_crvusd = 0, as on chain). The keeper (keeper_report = 3) delivers a report once the stored one is an hour
+# old; arbitrageurs pick the best report published in [event - 12 s, event + 3 s] (arb_report_offset 2003).
+[run]
+id = "weth-live-pyth-20250324-20261109"
+evaluator = "../curve-fx-sim/curve-fx-arb-harness/build/report-lean/arb_evaluator_f64"
+template = "../curve-fx-sim/curve-fx-optimization/configs/templates/ethusd-yb-weth-live-20250324.json"
+batch_size = 1
+workers = 1
+metric_fields = ["pool_nav_vs_hold", "arb_pnl_coin0", "lp_fee_coin0", "apy", "apy_net", "apy_net_gm60", "trades", "n_rebalances", "max_7d_rel_price_diff", "tw_avg_pool_fee", "donated_apy", "xcp_growth_apy", "oracle_refreshes", "yb_apy", "yb_apy_gm30", "yb_apy_gm60", "yb_apy_gm60_worst", "yb_final_growth", "yb_apy_par", "yb_final_growth_par", "yb_par_valid", "yb_external_growth_eth", "yb_external_max_drawdown_hourly", "yb_releverage_trades", "yb_levamm_profit_coin0", "arb_offered_report_trades", "arb_withheld_report_trades", "early_stop_ts", "elapsed_ms"]
+
+[session]
+event_mode = "block"
+event_cursor = "fast_skip"
+arb_settle_offset_s = 1
+start_time = 1742774400
+end_time = 1794182388  # the tape's last slot, 2026-11-09 23:59:47 UTC, + 1 s
+dustswap_freq_s = 3600
+yb_releverage_fee = 0.014
+yb_cash_multiplier = 3.0
+yb_execution_bps = 5.0
+yb_min_net_profit_coin0 = 1.0
+yb_self_touch = false
+early_stop_max_7d_rel_price_diff = 0  # one trajectory: run the whole history
+
+[scenario]
+id = "ethusd-crvusd-blocks"
+block_tape = "../curve-fx-sim/curve-fx-optimization/data/market/binance/spot/blocks-20250324-d25-20261109/eth-d22-blocks-20250324-20261109.npz"
+price_feed = "../curve-fx-sim/curve-fx-optimization/data/market/pyth/ethusd-20261109/reports-20250324-20261109.npz"
+yb_mode = "active_2l"
+
+[compiled_policy]
+id = "report_lean"
+header = "../curve-fx-sim/twocrypto-cpp/include/pools/twocrypto_fx/policies/report_lean.hpp"
+parameter_names = ["base_fee", "capture", "fallback_fee", "relax_time_s", "fast_half_life_s", "slow_half_life_s", "trend_gate", "step_cap", "report_lifetime_s"]
+
+[candidate.defaults]
+policy_params = [0.006, 0.80, 0.02, 90.0, 5400.0, 10800.0, 0.0075, 0.005, 5400.0]
+pool = { donation_apy = 0.009, adjustment_step_max = 0.005, ma_time = 865, initial_donation_days = 0, donation_frequency = 86400, donation_coins_ratio = 0.5, reserved_profit_fraction = 0.43, donation_shares_max_ratio = 0.1, costs = { entry_edge_bps = 1.5, arb_fee_bps = 0.0, gas_coin0 = 0.0, report_coin0 = 0.0 }, run = { arb_report_offset = 2003, keeper_report = 3, arb_report_rate = 1.0, arb_settle_offset_s = 1, driver_crvusd = 0, yb_releverage_fee = 0.014 } }

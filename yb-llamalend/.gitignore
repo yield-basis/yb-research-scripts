@@ -1,0 +1,12 @@
+# curve-fx-sim workspace (setup.sh): three clones, builds and ~3 GB of inputs
+curve-fx-sim/
+# LlamaLend engine and reference simulators (setup.sh), and the scan build
+external/
+llamma/build/
+# full traces (~260 MB at 300 s, 1.3 GB at 60 s) and the large per-row series; run.sh rebuilds them
+runs/*/trace/
+runs/*/trajectory.csv
+runs/*/llamma_input.bin
+# run records with this machine's absolute paths (run.sh rewrites them)
+runs/*/run.json
+runs/*/results.npz
